@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "annual-report-analyst-ingest"
+version = "0.1.0"
+description = "Document ingestion toolkit for the annual report analyst."
+authors = [{ name = "Consigli Challenge Team" }]
+requires-python = ">=3.11"
+dependencies = [
+  "langchain>=0.2.0",
+  "langchain-openai>=0.2.0",
+  "openai>=1.40.0",
+  "chromadb>=0.5.5",
+  "pypdf>=4.2.0",
+  "python-docx>=1.1.0",
+  "pandas>=2.2.2",
+  "tqdm>=4.66.5",
+  "typer>=0.12.4",
+  "pytesseract>=0.3.13",
+  "pillow>=10.4.0",
+  "pdfplumber>=0.11.4",
+  "pydantic>=2.8.0",
+  "rapidfuzz>=3.9.4",
+  "rich>=13.7.1"
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.6.3",
+  "pytest>=8.3.2"
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ingest"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
