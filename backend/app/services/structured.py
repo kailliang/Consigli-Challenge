@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Iterable
+import re
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,3 +46,58 @@ async def fetch_recent_tables(
 
     results = await session.scalars(stmt)
     return list(results)
+
+
+def summarize_time_series(
+    table_summary: TableSummary,
+    *,
+    max_rows: int = 5,
+    max_points: int = 3,
+) -> list[str]:
+    """Produce heuristic time-series summaries from table rows."""
+
+    rows = table_summary.rows or []
+    if not rows:
+        return []
+
+    summaries: list[str] = []
+
+    for row in rows[:max_rows]:
+        items = list(row.items())
+        if not items:
+            continue
+
+        label_value = str(items[0][1]).strip()
+        if not label_value:
+            label_value = str(items[0][0]).strip()
+
+        if not label_value:
+            continue
+
+        points: list[str] = []
+        for key, value in items[1:]:
+            if len(points) >= max_points:
+                break
+
+            if _looks_like_year(str(key)) and _looks_like_number(str(value)):
+                points.append(f"{key}: {value}")
+
+        if points:
+            summaries.append(f"{label_value} -> {' | '.join(points)}")
+
+    return summaries
+
+
+_YEAR_PATTERN = re.compile(r"^\d{4}$")
+_NUMBER_PATTERN = re.compile(r"^[+-]?(?:\d+[\d,\.]*|\d{1,3}(?:,\d{3})+(?:\.\d+)?)$")
+
+
+def _looks_like_year(value: str) -> bool:
+    return bool(_YEAR_PATTERN.match(value.strip()))
+
+
+def _looks_like_number(value: str) -> bool:
+    cleaned = value.strip()
+    if not cleaned:
+        return False
+    return bool(_NUMBER_PATTERN.match(cleaned))

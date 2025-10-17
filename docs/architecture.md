@@ -8,18 +8,18 @@ This document tracks early decisions while the system is under construction. Ref
 - **Configuration**: Pydantic settings (`app/core/config.py`) centralize model names, store locations, and feature flags (memory windows, tracing toggles, etc.).
 - **Logging**: Structlog-based JSON logging (`app/core/logging.py`) is ready for shipping to centralized observability platforms.
 - **Data access**: Chroma client helper (`app/services/vectorstore.py`) and async SQLAlchemy engine (`app/core/db.py`) prepare persistence layers for embeddings and structured facts.
-- **Query API**: `/v1/query` route now runs a LangChain-based RetrievalQA pipeline (`app/services/rag.py`) backed by Chroma + structured table lookups.
+- **Query API**: `/v1/query` returns JSON and `/v1/query/stream` exposes Server-Sent Events built on the LangChain RetrievalQA pipeline (`app/services/rag.py`) with Chroma + structured table lookups, inline numeric validation, and heuristic time-series summaries.
 
 ### Upcoming
 
-- Harden the RAG prompt, add numeric consistency checks against structured tables, and expand comparison/time-series pathways.
+- Harden the RAG prompt, add richer comparison pathways, and elevate validation from heuristics to deterministic dataset checks.
 - Session memory store aligning with the 10-turn window + rolling summary requirement.
 - Build comparison/time-series services that combine vector + structured store data.
 
 ## Frontend
 
 - **React + Vite**: Chat shell with Tailwind styling, query caching, and placeholder interactions (`src/components/chat`).
-- **State Management**: `useChatSession` now calls the `/v1/query` backend and surfaces citation stubs in the UI.
+- **State Management**: `useChatSession` now streams SSE tokens (falling back to JSON), appending validation notes inline and surfacing citation stubs in the UI.
 
 ### Upcoming
 

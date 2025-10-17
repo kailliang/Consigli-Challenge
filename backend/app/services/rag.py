@@ -7,10 +7,13 @@ from dataclasses import dataclass
 from textwrap import shorten
 from typing import Any, Iterable
 
+from collections.abc import AsyncIterator
+import re
+
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import Runnable
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +31,8 @@ class RAGContext:
 
     retriever: Any | None
     chain: Runnable | None
+    llm: ChatOpenAI | None
+    prompt: ChatPromptTemplate | None
     settings: AppSettings
 
 
@@ -39,13 +44,13 @@ def build_rag_context(settings: AppSettings) -> RAGContext:
 
     if not settings.openai_api_key:
         logger.warning("rag.context.missing_api_key", message="OpenAI key not configured")
-        return RAGContext(retriever=None, chain=None, settings=settings)
+        return RAGContext(retriever=None, chain=None, llm=None, prompt=None, settings=settings)
 
     try:
         vector_store = vectorstore.get_langchain_vectorstore(settings.vector_collection_name)
     except Exception as exc:  # pragma: no cover - depends on runtime resources
         logger.exception("rag.context.vectorstore_init_failed", exc_info=exc)
-        return RAGContext(retriever=None, chain=None, settings=settings)
+        return RAGContext(retriever=None, chain=None, llm=None, prompt=None, settings=settings)
 
     retriever = vector_store.as_retriever(search_kwargs={"k": settings.retriever_k})
 
@@ -74,7 +79,7 @@ def build_rag_context(settings: AppSettings) -> RAGContext:
     )
 
     chain: Runnable = prompt | llm | StrOutputParser()
-    return RAGContext(retriever=retriever, chain=chain, settings=settings)
+    return RAGContext(retriever=retriever, chain=chain, llm=llm, prompt=prompt, settings=settings)
 
 
 def get_rag_context(settings: AppSettings | None = None) -> RAGContext:
@@ -104,6 +109,116 @@ async def generate_response(
             "Once ingestion is ready, this endpoint will return grounded answers with citations.",
         )
 
+    retrieval = await _prepare_retrieval(
+        context=context,
+        prompt_text=prompt_text,
+        db_session=db_session,
+    )
+
+    if isinstance(retrieval, ChatMessage):
+        return retrieval
+
+    documents, table_lookup, context_text = retrieval
+
+    try:
+        answer_text: str = await context.chain.ainvoke(
+            {"question": prompt_text, "context": context_text}
+        )
+    except Exception as exc:  # pragma: no cover - external dependency
+        logger.exception("rag.generation.error", exc_info=exc)
+        return _placeholder_response("Language model failed to generate a response.")
+
+    validated_content, _ = _apply_numeric_validation(answer_text, table_lookup)
+    citations = _build_citations(documents, table_lookup)
+
+    return ChatMessage(
+        id=str(uuid.uuid4()),
+        role="assistant",
+        content=validated_content,
+        citations=citations,
+    )
+
+
+async def stream_response(
+    prompt_text: str,
+    *,
+    session_id: str,
+    context: RAGContext,
+    db_session: AsyncSession | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream a response event sequence.
+
+    This stub currently streams the final message in one chunk to unblock frontend plumbing.
+    """
+
+    if context.retriever is None or context.chain is None or context.llm is None or context.prompt is None:
+        message = await generate_response(
+            prompt_text=prompt_text,
+            session_id=session_id,
+            context=context,
+            db_session=db_session,
+        )
+        yield {"event": "token", "data": {"content": message.content}}
+        yield {"event": "done", "data": {"session_id": session_id, "message": message.model_dump()}}
+        return
+
+    retrieval = await _prepare_retrieval(
+        context=context,
+        prompt_text=prompt_text,
+        db_session=db_session,
+    )
+
+    if isinstance(retrieval, ChatMessage):
+        yield {"event": "token", "data": {"content": retrieval.content}}
+        yield {"event": "done", "data": {"session_id": session_id, "message": retrieval.model_dump()}}
+        return
+
+    documents, table_lookup, context_text = retrieval
+
+    prompt_value = context.prompt.format_prompt(question=prompt_text, context=context_text)
+    messages = prompt_value.to_messages()
+
+    accumulated: list[str] = []
+
+    try:
+        async for chunk in context.llm.astream(messages):
+            token = getattr(chunk, "content", None)
+            if not token:
+                token = getattr(chunk.message, "content", None)
+            if not token:
+                continue
+            accumulated.append(token)
+            yield {"event": "token", "data": {"content": token}}
+    except Exception as exc:  # pragma: no cover
+        logger.exception("rag.streaming.error", exc_info=exc)
+        message = _placeholder_response("Streaming failed unexpectedly. Please retry.")
+        yield {"event": "token", "data": {"content": message.content}}
+        yield {"event": "done", "data": {"session_id": session_id, "message": message.model_dump()}}
+        return
+
+    final_content = "".join(accumulated)
+    validated_content, suffix = _apply_numeric_validation(final_content, table_lookup)
+
+    if suffix:
+        yield {"event": "token", "data": {"content": suffix}}
+
+    citations = _build_citations(documents, table_lookup)
+    message = ChatMessage(
+        id=str(uuid.uuid4()),
+        role="assistant",
+        content=validated_content,
+        citations=citations,
+    )
+
+    yield {"event": "done", "data": {"session_id": session_id, "message": message.model_dump()}}
+
+
+async def _prepare_retrieval(
+    *,
+    context: RAGContext,
+    prompt_text: str,
+    db_session: AsyncSession | None,
+) -> ChatMessage | tuple[list[Document], dict[str, Any], str]:
     try:
         documents: list[Document] = await context.retriever.aget_relevant_documents(prompt_text)
     except Exception as exc:  # pragma: no cover - external dependency
@@ -122,23 +237,7 @@ async def generate_response(
         table_lookup = await structured.fetch_tables_by_ids(db_session, table_ids)
 
     context_text = _format_context(documents, table_lookup)
-
-    try:
-        answer_text: str = await context.chain.ainvoke(
-            {"question": prompt_text, "context": context_text}
-        )
-    except Exception as exc:  # pragma: no cover - external dependency
-        logger.exception("rag.generation.error", exc_info=exc)
-        return _placeholder_response("Language model failed to generate a response.")
-
-    citations = _build_citations(documents, table_lookup)
-
-    return ChatMessage(
-        id=str(uuid.uuid4()),
-        role="assistant",
-        content=answer_text.strip(),
-        citations=citations,
-    )
+    return documents, table_lookup, context_text
 
 
 def _format_context(documents: Iterable[Document], table_lookup: dict[str, Any]) -> str:
@@ -166,7 +265,10 @@ def _format_context(documents: Iterable[Document], table_lookup: dict[str, Any])
             row_text = "\n".join(
                 " | ".join(f"{key}: {value}" for key, value in row.items() if value) for row in preview_rows
             )
-            body = row_text or doc.page_content
+            time_series = structured.summarize_time_series(table_summary)
+            summary_text = "\n".join(time_series)
+            combined = "\n\n".join(part for part in [row_text, summary_text] if part)
+            body = combined or doc.page_content
         else:
             body = doc.page_content
 
@@ -211,6 +313,55 @@ def _build_citations(documents: Iterable[Document], table_lookup: dict[str, Any]
         )
 
     return citations
+
+
+def _apply_numeric_validation(
+    answer_text: str,
+    table_lookup: dict[str, Any],
+) -> tuple[str, str | None]:
+    """Validate numeric literals against retrieved table rows."""
+
+    base_text = answer_text.rstrip()
+
+    if not table_lookup:
+        return base_text.strip(), None
+
+    extracted_numbers = {
+        _normalize_number(match) for match in re.findall(r"\b[+-]?\d[\d,\.]*\b", base_text)
+    }
+    extracted_numbers.discard("")
+
+    if not extracted_numbers:
+        return base_text.strip(), None
+
+    table_numbers: set[str] = set()
+    for summary in table_lookup.values():
+        rows = summary.rows or []
+        for row in rows:
+            for value in row.values():
+                normalized = _normalize_number(str(value))
+                if normalized:
+                    table_numbers.add(normalized)
+
+    missing = sorted(num for num in extracted_numbers if num not in table_numbers)
+
+    if missing:
+        suffix = (
+            "\n\nValidation warning: unable to verify the following values against retrieved tables — "
+            + ", ".join(missing)
+        )
+        return base_text.strip() + suffix, suffix
+
+    suffix = "\n\nValidation: numeric values verified against retrieved tables."
+    return base_text.strip() + suffix, suffix
+
+
+def _normalize_number(value: str) -> str:
+    cleaned = value.replace(",", "").strip()
+    if not cleaned:
+        return ""
+    cleaned = cleaned.rstrip(".")
+    return cleaned
 
 
 def _placeholder_response(message: str) -> ChatMessage:
