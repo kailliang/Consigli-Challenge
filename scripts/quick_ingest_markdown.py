@@ -87,9 +87,10 @@ def run_ingestion(config: QuickConfig) -> Path:
 
 if __name__ == "__main__":
     data_dirs = [
-        ROOT / "ingest" / "data" / "BMW",
-        ROOT / "ingest" / "data" / "Tesla",
-        ROOT / "ingest" / "data" / "Ford",
+        ROOT / "data" / "BMW",
+        ROOT / "data" / "Tesla",
+        ROOT / "data" / "Ford",
+        ROOT / "data" / "General",
     ]
     output = ROOT / "data" / "chunks.json"
     run_ingestion(QuickConfig(input_dirs=data_dirs, output_path=output))

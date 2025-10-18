@@ -1,67 +1,83 @@
-import json
-import os
+from contextlib import contextmanager
 
 from fastapi.testclient import TestClient
 
+from app.api import deps
 from app.core.config import get_settings
 from app.main import create_app
+from app.models.chat import ChatMessage
 from app.services import rag
 
 
-def test_query_returns_chunk_match(tmp_path) -> None:
-    chunks = [
-        {
-            "chunk_id": "sample-1",
-            "text": "Tesla reported revenue of USD 80B in 2023.",
-            "document_name": "tesla-2023.md",
-        }
-    ]
-    chunk_path = tmp_path / "chunks.json"
-    chunk_path.write_text(json.dumps(chunks), encoding="utf-8")
-
-    rag._chunk_cache = None  # reset cached index
-
-    os.environ["CHUNK_INDEX_PATH"] = str(chunk_path)
+@contextmanager
+def override_dependencies(app):
+    original = dict(app.dependency_overrides)
     try:
-        get_settings.cache_clear()
-        client = TestClient(create_app())
+        app.dependency_overrides[deps.get_rag_context] = lambda: rag.RAGContext(
+            retriever=object(),
+            chain=object(),
+            llm=object(),
+            prompt=object(),
+            settings=get_settings(),
+        )
+        yield
+    finally:
+        app.dependency_overrides = original
 
+
+def test_query_returns_response(monkeypatch) -> None:
+    async def fake_generate_response(*_, **__) -> ChatMessage:
+        return ChatMessage(
+            id="test-id",
+            role="assistant",
+            content="Tesla reported revenue of USD 80B in 2023.",
+            citations=[],
+        )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    get_settings.cache_clear()
+    monkeypatch.setattr(rag, "generate_response", fake_generate_response)
+
+    app = create_app()
+
+    with override_dependencies(app):
+        client = TestClient(app)
         response = client.post("/v1/query", json={"prompt": "What was Tesla's 2023 revenue?"})
         assert response.status_code == 200
         body = response.json()
-
         assert body["session_id"]
         assert body["message"]["role"] == "assistant"
-        assert "Top match" in body["message"]["content"]
-        assert body["message"]["citations"]
-    finally:
-        get_settings.cache_clear()
-        os.environ.pop("CHUNK_INDEX_PATH", None)
-        rag._chunk_cache = None
+        assert "Tesla reported revenue" in body["message"]["content"]
+        assert body["message"]["citations"] == []
+    get_settings.cache_clear()
 
 
-def test_streaming_endpoint_returns_sse_response(tmp_path) -> None:
-    chunks = [
-        {
-            "chunk_id": "sample-1",
-            "text": "BMW grew automotive revenue by 10% in 2022.",
-            "document_name": "bmw-2022.md",
+def test_streaming_endpoint_returns_sse_response(monkeypatch) -> None:
+    async def fake_stream_response(*_, **__):
+        yield {"event": "token", "data": {"content": "chunk"}}
+        yield {
+            "event": "done",
+            "data": {
+                "session_id": "session",
+                "message": ChatMessage(id="stream", role="assistant", content="final", citations=[]).model_dump(),
+            },
         }
-    ]
-    chunk_path = tmp_path / "chunks.json"
-    chunk_path.write_text(json.dumps(chunks), encoding="utf-8")
 
-    rag._chunk_cache = None
+    async def fake_generate_response(*_, **__) -> ChatMessage:
+        return ChatMessage(id="fallback", role="assistant", content="chunk", citations=[])
 
-    os.environ["CHUNK_INDEX_PATH"] = str(chunk_path)
-    try:
-        get_settings.cache_clear()
-        client = TestClient(create_app())
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    get_settings.cache_clear()
+    monkeypatch.setattr(rag, "stream_response", fake_stream_response)
+    monkeypatch.setattr(rag, "generate_response", fake_generate_response)
 
+    app = create_app()
+
+    with override_dependencies(app):
+        client = TestClient(app)
         response = client.post("/v1/query/stream", json={"prompt": "How fast did BMW grow?"})
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/event-stream")
-    finally:
-        get_settings.cache_clear()
-        os.environ.pop("CHUNK_INDEX_PATH", None)
-        rag._chunk_cache = None
+        body = list(response.iter_lines())
+        assert any("chunk" in line for line in body)
+    get_settings.cache_clear()

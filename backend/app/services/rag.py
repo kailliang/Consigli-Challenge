@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import json
-import math
 import uuid
 from dataclasses import dataclass
 from textwrap import shorten
-from typing import Any, Iterable, cast
+from typing import Any, Iterable
 
 from collections.abc import AsyncIterator
 import re
-from pathlib import Path
 
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
@@ -40,109 +37,20 @@ class RAGContext:
 
 
 _context: RAGContext | None = None
-_chunk_cache: list[dict[str, Any]] | None = None
-
-
-def _load_chunk_index(settings: AppSettings) -> list[dict[str, Any]]:
-    global _chunk_cache
-
-    if _chunk_cache is not None:
-        return _chunk_cache
-
-    path = Path(settings.chunk_index_path)
-    if not path.exists():
-        logger.warning("rag.chunk_index.missing", path=str(path))
-        _chunk_cache = []
-        return _chunk_cache
-
-    try:
-        raw = path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-        if isinstance(data, list):
-            _chunk_cache = cast(list[dict[str, Any]], data)
-        else:
-            logger.warning("rag.chunk_index.invalid", path=str(path))
-            _chunk_cache = []
-    except Exception as exc:  # pragma: no cover
-        logger.exception("rag.chunk_index.load_failed", exc_info=exc, path=str(path))
-        _chunk_cache = []
-
-    return _chunk_cache
-
-
-def _tokenize(text: str) -> set[str]:
-    return {token.lower() for token in re.findall(r"[\w$€£%\.]+", text)}
-
-
-def _score(query_tokens: set[str], chunk_tokens: set[str]) -> float:
-    if not query_tokens or not chunk_tokens:
-        return 0.0
-    overlap = len(query_tokens & chunk_tokens)
-    if overlap == 0:
-        return 0.0
-    return overlap / math.sqrt(len(query_tokens) * len(chunk_tokens))
-
-
-def _fallback_chunk_response(prompt_text: str, settings: AppSettings) -> ChatMessage:
-    chunks = _load_chunk_index(settings)
-    if not chunks:
-        return _placeholder_response(
-            "No ingested chunks available yet. Please run the ingestion pipeline first."
-        )
-
-    query_tokens = _tokenize(prompt_text)
-    best_chunk: dict[str, Any] | None = None
-    best_score = 0.0
-
-    for chunk in chunks:
-        chunk_tokens = _tokenize(str(chunk.get("text", "")))
-        score = _score(query_tokens, chunk_tokens)
-        if score > best_score:
-            best_score = score
-            best_chunk = chunk
-
-    if best_chunk is None or best_score == 0.0:
-        return _placeholder_response(
-            "I couldn't find a relevant chunk for that question in the current corpus."
-        )
-
-    section = best_chunk.get("section")
-
-    citation = Citation(
-        id=str(best_chunk.get("chunk_id", uuid.uuid4())),
-        source=str(
-            best_chunk.get("document_name")
-            or best_chunk.get("source_path")
-            or "unknown"
-        ),
-        section=section,
-        page=None,
-        snippet=shorten(str(best_chunk.get("text", "")), width=280, placeholder="…"),
-    )
-
-    section_suffix = f" (section: {section})" if section else ""
-    content = f"Top match from {citation.source}{section_suffix}.\n\n{best_chunk.get('text', '').strip()}"
-
-    return ChatMessage(
-        id=str(uuid.uuid4()),
-        role="assistant",
-        content=content,
-        citations=[citation],
-    )
 
 
 def build_rag_context(settings: AppSettings) -> RAGContext:
     """Instantiate retriever and chain resources."""
 
     if not settings.openai_api_key:
-        logger.warning("rag.context.missing_api_key", message="OpenAI key not configured")
-        return RAGContext(retriever=None, chain=None, llm=None, prompt=None, settings=settings)
+        logger.error("rag.context.missing_api_key", message="OpenAI key not configured")
+        raise RuntimeError("OpenAI API key required for retrieval.")
 
     try:
         vector_store = vectorstore.get_langchain_vectorstore(settings.vector_collection_name)
     except Exception as exc:  # pragma: no cover - depends on runtime resources
         logger.exception("rag.context.vectorstore_init_failed", exc_info=exc)
-        return RAGContext(retriever=None, chain=None, llm=None, prompt=None, settings=settings)
+        raise
 
     retriever = vector_store.as_retriever(search_kwargs={"k": settings.retriever_k})
 
@@ -196,7 +104,7 @@ async def generate_response(
     """Generate a response using the configured RAG pipeline."""
 
     if context.retriever is None or context.chain is None:
-        return _fallback_chunk_response(prompt_text, context.settings)
+        raise RuntimeError("RAG context is not fully initialised.")
 
     retrieval = await _prepare_retrieval(
         context=context,
@@ -241,15 +149,7 @@ async def stream_response(
     """
 
     if context.retriever is None or context.chain is None or context.llm is None or context.prompt is None:
-        message = await generate_response(
-            prompt_text=prompt_text,
-            session_id=session_id,
-            context=context,
-            db_session=db_session,
-        )
-        yield {"event": "token", "data": {"content": message.content}}
-        yield {"event": "done", "data": {"session_id": session_id, "message": message.model_dump()}}
-        return
+        raise RuntimeError("RAG context is not fully initialised.")
 
     retrieval = await _prepare_retrieval(
         context=context,
@@ -312,10 +212,10 @@ async def _prepare_retrieval(
         documents: list[Document] = await context.retriever.aget_relevant_documents(prompt_text)
     except Exception as exc:  # pragma: no cover - external dependency
         logger.exception("rag.retriever.error", exc_info=exc)
-        return _fallback_chunk_response(prompt_text, context.settings)
+        return _placeholder_response("Retriever failed to fetch supporting context. Please retry later.")
 
     if not documents:
-        return _fallback_chunk_response(prompt_text, context.settings)
+        return _placeholder_response("No relevant context found for that query.")
 
     table_lookup: dict[str, Any] = {}
 

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
+from html import unescape
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Tuple
 
 
 @dataclass(slots=True)
@@ -19,7 +21,9 @@ def parse_markdown(path: Path) -> MarkdownParseResult:
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
 
-    tables = _extract_tables(lines, path)
+    tables, _ = _extract_markdown_tables(lines, path)
+    html_tables, _ = _extract_html_tables(text, path, start_index=len(tables))
+    tables.extend(html_tables)
     sections = _extract_sections(lines)
 
     # Markdown files lack pages; treat entire file as one logical page.
@@ -53,11 +57,16 @@ def _extract_sections(lines: list[str]) -> list[dict[str, Any]]:
     return sections
 
 
-def _extract_tables(lines: list[str], path: Path) -> list[dict[str, Any]]:
+def _extract_markdown_tables(
+    lines: list[str],
+    path: Path,
+    *,
+    start_index: int = 0,
+) -> Tuple[list[dict[str, Any]], int]:
     tables: list[dict[str, Any]] = []
     buffer: list[str] = []
     in_table = False
-    table_index = 0
+    table_index = start_index
 
     def flush_buffer() -> None:
         nonlocal buffer, in_table, table_index
@@ -105,4 +114,68 @@ def _extract_tables(lines: list[str], path: Path) -> list[dict[str, Any]]:
     if in_table:
         flush_buffer()
 
-    return tables
+    return tables, table_index
+
+
+_TABLE_RE = re.compile(r"<table.*?>.*?</table>", re.IGNORECASE | re.DOTALL)
+_ROW_RE = re.compile(r"<tr.*?>.*?</tr>", re.IGNORECASE | re.DOTALL)
+_CELL_RE = re.compile(r"<t[dh].*?>(.*?)</t[dh]>", re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(r"<.*?>", re.DOTALL)
+
+
+def _strip_html(value: str) -> str:
+    cleaned = _TAG_RE.sub(" ", value)
+    return unescape(cleaned).strip()
+
+
+def _extract_html_tables(
+    text: str,
+    path: Path,
+    *,
+    start_index: int = 0,
+) -> Tuple[list[dict[str, Any]], int]:
+    tables: list[dict[str, Any]] = []
+    table_index = start_index
+
+    for table_match in _TABLE_RE.finditer(text):
+        table_html = table_match.group(0)
+        rows = _ROW_RE.findall(table_html)
+        if not rows:
+            continue
+
+        header_cells = _CELL_RE.findall(rows[0])
+        headers = [
+            (_strip_html(cell) or f"col_{idx}")
+            for idx, cell in enumerate(header_cells)
+        ]
+        if not headers:
+            continue
+
+        data_rows: list[dict[str, str]] = []
+        for row_html in rows[1:]:
+            cells = _CELL_RE.findall(row_html)
+            if not cells:
+                continue
+            row_dict: dict[str, str] = {}
+            has_value = False
+            for idx, header in enumerate(headers):
+                value = _strip_html(cells[idx]) if idx < len(cells) else ""
+                if value:
+                    has_value = True
+                row_dict[header] = value
+            if has_value:
+                data_rows.append(row_dict)
+
+        table_index += 1
+        tables.append(
+            {
+                "table_id": f"{path.stem}-table-{table_index}",
+                "caption": None,
+                "page_range": "1",
+                "row_count": len(data_rows),
+                "column_count": len(headers),
+                "rows": data_rows,
+            }
+        )
+
+    return tables, table_index

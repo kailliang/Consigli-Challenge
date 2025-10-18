@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -38,12 +39,24 @@ from .stores.sqlite_writer import StructuredStore
 console = Console()
 
 
+def _infer_company(path: Path) -> str:
+    company = path.parent.name
+    if not company:
+        raise ValueError(f"Unable to infer company from path {path}")
+    return company
+
+
+def _infer_year(path: Path) -> int | None:
+    match = re.search(r"(19|20)\d{2}", path.stem)
+    return int(match.group(0)) if match else None
+
+
 @dataclass(slots=True)
 class PipelineConfig:
     input_paths: list[Path]
     output_dir: Path
-    company: str
-    year: int
+    company: str | None = None
+    year: int | None = None
     currency: str | None = None
     reporting_basis: str | None = None
     dry_run: bool = False
@@ -55,6 +68,10 @@ class PipelineConfig:
     structured_db_path: Path = Path("./data/metrics.db")
     collection_name: str = "annual-reports"
     openai_api_key: str | None = None
+    openai_api_base: str | None = None
+    chroma_batch_size: int = 32
+    chroma_concurrency: int = 4
+    append_chunks: bool = False
 
 
 @dataclass(slots=True)
@@ -71,7 +88,9 @@ class IngestionPipeline:
     config: PipelineConfig
 
     def run(self) -> IngestionResult:
-        console.rule(f"[bold cyan]Ingestion start[/] :: {self.config.company} {self.config.year}")
+        label_company = self.config.company or "auto"
+        label_year = self.config.year or "auto"
+        console.rule(f"[bold cyan]Ingestion start[/] :: {label_company} {label_year}")
 
         parsed_docs = list(self._parse_documents(self.config.input_paths))
 
@@ -123,7 +142,7 @@ class IngestionPipeline:
     def _write_manifest(self, parsed_docs: list[ParsedDocument]) -> Path:
         manifest_dir = self.config.output_dir / "manifests"
         manifest_dir.mkdir(parents=True, exist_ok=True)
-        manifest_path = manifest_dir / f"{self.config.company}-{self.config.year}.json"
+        manifest_path = manifest_dir / f"{(self.config.company or 'auto')}-{(self.config.year or 'auto')}.json"
 
         manifest_data = [parsed.model_dump() for parsed in parsed_docs]
         manifest_path.write_text(serialize_manifest(manifest_data))
@@ -136,9 +155,12 @@ class IngestionPipeline:
         table_records: list[dict] = []
 
         for doc_index, parsed in enumerate(parsed_docs):
+            company = self.config.company or _infer_company(parsed.path)
+            year = self.config.year or _infer_year(parsed.path)
+
             base_metadata = {
-                "company": self.config.company,
-                "year": self.config.year,
+                "company": company,
+                "year": year,
                 "document_name": parsed.name,
                 "doc_type": parsed.doc_type,
                 "reporting_basis": self.config.reporting_basis,
@@ -174,8 +196,8 @@ class IngestionPipeline:
 
                 table_records.append(
                     {
-                        "company": self.config.company,
-                        "year": self.config.year,
+                        "company": company,
+                        "year": year,
                         "document_name": parsed.name,
                         "table_id": table.table_id,
                         "row_count": table.row_count,
@@ -199,6 +221,9 @@ class IngestionPipeline:
             collection_name=self.config.collection_name,
             embedding_model=self.config.embedding_model,
             openai_api_key=self.config.openai_api_key,
+            openai_api_base=self.config.openai_api_base,
+            batch_size=self.config.chroma_batch_size,
+            concurrency=self.config.chroma_concurrency,
         )
 
         tokens_used = chroma_writer.upsert_chunks(chunk_items)
@@ -213,7 +238,7 @@ class IngestionPipeline:
         return tokens_used
 
     def _write_chunks_json(self, chunk_items: list[tuple[str, Chunk]]) -> Path:
-        from json import dumps
+        from json import dumps, loads
 
         output_dir = self.config.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -229,5 +254,12 @@ class IngestionPipeline:
             chunk_records.append(record)
 
         chunks_path = output_dir / "chunks.json"
-        chunks_path.write_text(dumps(chunk_records, indent=2, ensure_ascii=False))
+        if self.config.append_chunks and chunks_path.exists():
+            try:
+                existing = loads(chunks_path.read_text(encoding="utf-8"))
+                if isinstance(existing, list):
+                    chunk_records = existing + chunk_records
+            except Exception:
+                pass
+        chunks_path.write_text(dumps(chunk_records, indent=2, ensure_ascii=False), encoding="utf-8")
         return chunks_path
