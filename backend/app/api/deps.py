@@ -7,7 +7,7 @@ from fastapi import Depends
 from app.core.config import AppSettings, get_settings
 from app.core.db import get_session
 from app.models.chat import QueryRequest
-from app.services import rag
+from app.services import rag, vectorstore
 
 
 def get_app_settings() -> AppSettings:

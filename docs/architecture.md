@@ -29,6 +29,6 @@ This document tracks early decisions while the system is under construction. Ref
 
 ## Ingestion & Infra
 
-- `ingest/` houses the Typer-ready pipeline with pdfplumber/python-docx parsing, heading summaries, manifest generation, char-level chunking, direct upserts into Chroma + SQLite, and a `ingest-cli` command for operational runs; `infra/` remains reserved for deployment tooling.
+- `ingest/` houses the Typer-ready pipeline with pdfplumber/python-docx parsing, Markdown support, heading summaries, manifest generation, char-level chunking, direct upserts into Chroma + SQLite, and a `ingest-cli` command for operational runs; `infra/` remains reserved for deployment tooling.
 - Next: upgrade parsers with OCR/table normalization, add worker containers, and orchestrate pipeline steps via distributed queue.
 - Plan to introduce Dockerfiles, Helm charts, and CI workflows once the pipelines stabilize.

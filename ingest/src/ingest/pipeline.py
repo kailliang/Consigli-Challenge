@@ -6,8 +6,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from rich.console import Console
-from rich.table import Table
+try:  # pragma: no cover - fallback when rich is unavailable
+    from rich.console import Console
+    from rich.table import Table
+except ImportError:  # pragma: no cover
+    class Console:  # type: ignore[override]
+        def rule(self, message: str) -> None:
+            print(f"=== {message} ===")
+
+        def print(self, message: str) -> None:
+            print(message)
+
+    class Table:  # type: ignore[override]
+        def __init__(self, show_header: bool = True, header_style: str = "") -> None:
+            self.rows: list[list[str]] = []
+
+        def add_column(self, _: str) -> None:  # noqa: D401 - no-op
+            return None
+
+        def add_row(self, *values: str) -> None:
+            self.rows.append(list(values))
+
+        def __str__(self) -> str:
+            return "\n".join([" | ".join(row) for row in self.rows])
 
 from .parsers.documents import ParsedDocument, parse_document, serialize_manifest
 from .chunking import Chunk, chunk_table_rows, chunk_text
@@ -23,12 +44,12 @@ class PipelineConfig:
     output_dir: Path
     company: str
     year: int
-    sector: str
     currency: str | None = None
     reporting_basis: str | None = None
     dry_run: bool = False
-    chunk_size: int = 1200
-    chunk_overlap: int = 200
+    # Updated strategy: 600–800 target, max 1000, overlap 60–100
+    chunk_size: int = 800
+    chunk_overlap: int = 80
     embedding_model: str = "text-embedding-3-small"
     chroma_path: Path = Path("./data/chroma")
     structured_db_path: Path = Path("./data/metrics.db")
@@ -42,6 +63,7 @@ class IngestionResult:
     tables_indexed: int
     tokens_used: int
     manifest_path: Path
+    chunks_path: Path
 
 
 @dataclass(slots=True)
@@ -73,18 +95,22 @@ class IngestionPipeline:
 
         manifest_path = self._write_manifest(parsed_docs)
 
+        chunk_items, table_records = self._prepare_ingest_assets(parsed_docs)
+        chunks_path = self._write_chunks_json(chunk_items)
+
         tokens_used = 0
 
         if self.config.dry_run:
             console.print("[yellow]Dry run enabled: skipping embedding and database writes.[/]")
         else:
-            tokens_used = self._embed_and_persist(parsed_docs)
+            tokens_used = self._embed_and_persist(chunk_items, table_records)
 
         return IngestionResult(
             documents_indexed=len(parsed_docs),
             tables_indexed=sum(doc.table_count for doc in parsed_docs),
             tokens_used=tokens_used,
             manifest_path=manifest_path,
+            chunks_path=chunks_path,
         )
 
     def _parse_documents(self, paths: Iterable[Path]) -> Iterable[ParsedDocument]:
@@ -103,7 +129,9 @@ class IngestionPipeline:
         manifest_path.write_text(serialize_manifest(manifest_data))
         return manifest_path
 
-    def _embed_and_persist(self, parsed_docs: Sequence[ParsedDocument]) -> int:
+    def _prepare_ingest_assets(
+        self, parsed_docs: Sequence[ParsedDocument]
+    ) -> tuple[list[tuple[str, Chunk]], list[dict]]:
         chunk_items: list[tuple[str, Chunk]] = []
         table_records: list[dict] = []
 
@@ -111,18 +139,18 @@ class IngestionPipeline:
             base_metadata = {
                 "company": self.config.company,
                 "year": self.config.year,
-                "sector": self.config.sector,
                 "document_name": parsed.name,
                 "doc_type": parsed.doc_type,
                 "reporting_basis": self.config.reporting_basis,
                 "document_sha": parsed.sha256,
+                "source_path": str(parsed.path),
             }
 
             text_chunks = chunk_text(
                 parsed.full_text,
                 chunk_size=self.config.chunk_size,
                 chunk_overlap=self.config.chunk_overlap,
-                base_metadata={**base_metadata, "chunk_type": "text"},
+                base_metadata=base_metadata,
             )
 
             for chunk_idx, chunk in enumerate(text_chunks):
@@ -133,7 +161,6 @@ class IngestionPipeline:
             for table_index, table in enumerate(parsed.tables):
                 table_metadata = {
                     **base_metadata,
-                    "chunk_type": "table",
                     "table_id": table.table_id,
                     "page_range": table.page_range,
                 }
@@ -159,6 +186,9 @@ class IngestionPipeline:
                     }
                 )
 
+        return chunk_items, table_records
+
+    def _embed_and_persist(self, chunk_items: list[tuple[str, Chunk]], table_records: list[dict]) -> int:
         console.print(f"[cyan]Preparing {len(chunk_items)} chunks for embedding.[/]")
 
         if not self.config.openai_api_key:
@@ -181,3 +211,23 @@ class IngestionPipeline:
         )
 
         return tokens_used
+
+    def _write_chunks_json(self, chunk_items: list[tuple[str, Chunk]]) -> Path:
+        from json import dumps
+
+        output_dir = self.config.output_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        chunk_records: list[dict] = []
+
+        for order, (chunk_id, chunk) in enumerate(chunk_items, start=1):
+            record = {
+                "chunk_id": chunk_id,
+                "text": chunk.text,
+                "order": order,
+                **chunk.metadata,
+            }
+            chunk_records.append(record)
+
+        chunks_path = output_dir / "chunks.json"
+        chunks_path.write_text(dumps(chunk_records, indent=2, ensure_ascii=False))
+        return chunks_path

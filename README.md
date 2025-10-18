@@ -26,7 +26,7 @@ Prototype workspace for a multi-modal retrieval-augmented generation (RAG) syste
 ### Ingestion CLI
 
 - Install ingestion package in editable mode: `pip install -e ingest/`
-- Run ingestion: `ingest-cli run ./reports --company Tesla --year 2023 --sector automotive`
+- Run ingestion: `ingest-cli run ./reports --company Tesla --year 2023`
   - Optional flags: `--dry-run`, `--chroma-dir`, `--structured-db`, `--currency`, `--reporting-basis`
   - `OPENAI_API_KEY` must be set unless provided explicitly via `--openai-api-key`
 

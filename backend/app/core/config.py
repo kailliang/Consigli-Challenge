@@ -24,6 +24,7 @@ class AppSettings(BaseSettings):
 
     chroma_persist_dir: str = Field(default="./data/chroma")
     structured_db_url: str = Field(default="sqlite+aiosqlite:///./data/metrics.db")
+    chunk_index_path: str = Field(default="./data/chunks.json")
 
     langsmith_api_key: str | None = None
     langsmith_endpoint: str | None = None

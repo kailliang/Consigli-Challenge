@@ -34,7 +34,6 @@ def run(
     input_paths: list[Path] = typer.Argument(..., help="Files or directories containing reports."),
     company: str = typer.Option(..., "--company", "-c", help="Company short name (e.g., Tesla)."),
     year: int = typer.Option(..., "--year", "-y", help="Reporting year."),
-    sector: str = typer.Option(..., "--sector", "-s", help="Sector tag (e.g., automotive)."),
     output_dir: Path = typer.Option(Path("./data"), "--output-dir", "-o", help="Output directory for manifests and stores."),
     currency: Optional[str] = typer.Option(None, "--currency", help="Document currency if known (e.g., USD)."),
     reporting_basis: Optional[str] = typer.Option(None, "--reporting-basis", help="Accounting basis (IFRS, US GAAP, etc.)."),
@@ -61,7 +60,6 @@ def run(
         output_dir=output_dir,
         company=company,
         year=year,
-        sector=sector,
         currency=currency,
         reporting_basis=reporting_basis,
         dry_run=dry_run,
@@ -88,6 +86,7 @@ def run(
     typer.echo(f"Tables indexed: {result.tables_indexed}")
     typer.echo(f"Tokens used (approx): {result.tokens_used}")
     typer.echo(f"Manifest path: {result.manifest_path}")
+    typer.echo(f"Chunks path: {result.chunks_path}")
 
 
 if __name__ == "__main__":  # pragma: no cover

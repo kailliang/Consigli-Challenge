@@ -20,3 +20,7 @@ data/
 
 # Env files
 *.env
+
+# Markdown
+*.md
+!README.md
