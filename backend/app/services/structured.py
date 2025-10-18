@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Iterable
 import re
 
@@ -88,6 +89,64 @@ def summarize_time_series(
     return summaries
 
 
+@dataclass(slots=True)
+class MetricSeries:
+    metric: str
+    points: list[tuple[str, str]]
+    source_table_id: str
+
+
+def extract_metric_series(
+    table_summary: TableSummary,
+    *,
+    aliases: dict[str, list[str]] | None = None,
+    max_points: int = 4,
+) -> list[MetricSeries]:
+    """Extract metric time series for named metrics from a table summary."""
+
+    if aliases is None:
+        aliases = {
+            "revenue": ["revenue", "sales"],
+            "ebitda": ["ebitda"],
+            "net_income": ["net", "profit"],
+        }
+
+    rows = table_summary.rows or []
+    if not rows:
+        return []
+
+    series: list[MetricSeries] = []
+
+    for row in rows:
+        label = _extract_label(row)
+        if not label:
+            continue
+
+        normalized_label = label.lower()
+        target_metric = None
+        for metric_name, alias_list in aliases.items():
+            if any(alias in normalized_label for alias in alias_list):
+                target_metric = metric_name
+                break
+
+        if not target_metric:
+            continue
+
+        points: list[tuple[str, str]] = []
+        for key, value in row.items():
+            if key == label:
+                continue
+            if _looks_like_year(str(key)) and _looks_like_number(str(value)):
+                points.append((str(key), str(value)))
+            if len(points) >= max_points:
+                break
+
+        if points:
+            series.append(MetricSeries(metric=target_metric, points=points, source_table_id=table_summary.table_id))
+
+    return series
+
+
 _YEAR_PATTERN = re.compile(r"^\d{4}$")
 _NUMBER_PATTERN = re.compile(r"^[+-]?(?:\d+[\d,\.]*|\d{1,3}(?:,\d{3})+(?:\.\d+)?)$")
 
@@ -101,3 +160,11 @@ def _looks_like_number(value: str) -> bool:
     if not cleaned:
         return False
     return bool(_NUMBER_PATTERN.match(cleaned))
+
+
+def _extract_label(row: dict) -> str | None:
+    if not row:
+        return None
+    first_key = next(iter(row))
+    raw = str(row.get(first_key) or first_key)
+    return raw.strip() or None

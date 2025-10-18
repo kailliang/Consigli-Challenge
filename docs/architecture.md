@@ -12,7 +12,7 @@ This document tracks early decisions while the system is under construction. Ref
 
 ### Upcoming
 
-- Harden the RAG prompt, add richer comparison pathways, and elevate validation from heuristics to deterministic dataset checks.
+- Harden the RAG prompt, elevate numeric checks from heuristics to deterministic datasets, and expose dedicated comparison endpoints.
 - Session memory store aligning with the 10-turn window + rolling summary requirement.
 - Build comparison/time-series services that combine vector + structured store data.
 
@@ -29,6 +29,6 @@ This document tracks early decisions while the system is under construction. Ref
 
 ## Ingestion & Infra
 
-- `ingest/` houses the Typer-ready pipeline with pdfplumber/python-docx parsing, heading summaries, manifest generation, char-level chunking, and direct upserts into Chroma + SQLite; `infra/` remains reserved for deployment tooling.
+- `ingest/` houses the Typer-ready pipeline with pdfplumber/python-docx parsing, heading summaries, manifest generation, char-level chunking, direct upserts into Chroma + SQLite, and a `ingest-cli` command for operational runs; `infra/` remains reserved for deployment tooling.
 - Next: upgrade parsers with OCR/table normalization, add worker containers, and orchestrate pipeline steps via distributed queue.
 - Plan to introduce Dockerfiles, Helm charts, and CI workflows once the pipelines stabilize.

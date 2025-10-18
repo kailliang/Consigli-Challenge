@@ -6,6 +6,7 @@ Current capabilities:
 - Table summaries (row/column counts, per-page identifiers) and heading extraction heuristics for section trees.
 - Deterministic file hashing and JSON manifest generation for reproducibility.
 - Character-based chunking for text and table rows, followed by embedding upserts into Chroma and table summary persistence in SQLite.
+- Typer CLI (`ingest-cli run ...`) for batch-ingesting reports directly from the command line.
 
 Planned enhancements:
 
