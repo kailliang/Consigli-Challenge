@@ -117,6 +117,8 @@ def chunk_table_rows(rows: list[dict[str, Any]], *, base_metadata: dict[str, Any
     page_range = meta.get("page_range")
     table_context = meta.get("table_context")
     caption = meta.get("caption")
+    nearby_text = meta.get("nearby_text")
+    surrounding_details = meta.get("surrounding_details")
 
     header_keys: list[str] = list(rows[0].keys()) if rows else []
     preview_rows = rows  # assume tables are not very large per requirement

@@ -35,8 +35,7 @@ python scripts/quick_ingest_markdown.py data/Ford/Ford_Annual_Report_2021.md --m
 python scripts/quick_ingest_markdown.py \
   --mode both \
   --table-summary-model gpt-5-mini \
-  --table-summary-max-tokens 80 \
-  --table-summary-temperature 0.2
+  --table-summary-max-tokens 80
 ```
 
 Planned enhancements:

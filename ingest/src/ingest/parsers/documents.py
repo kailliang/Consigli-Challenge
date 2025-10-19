@@ -23,6 +23,7 @@ class TableSummary(BaseModel):
     row_count: int
     column_count: int
     rows: list[dict[str, str]] = Field(default_factory=list)
+    raw_table: str | None = None
 
 
 class SectionSummary(BaseModel):

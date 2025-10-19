@@ -33,7 +33,7 @@ except ImportError:  # pragma: no cover
 
 from .parsers.documents import ParsedDocument, parse_document, serialize_manifest
 from .chunking import Chunk, chunk_table_rows, chunk_text
-from .table_context import TableContextGenerator
+from .table_context import TableContextGenerator, TableContextRequest
 from .stores.chroma_writer import ChromaWriter
 from .stores.sqlite_writer import StructuredStore
 
@@ -74,8 +74,8 @@ class PipelineConfig:
     chroma_concurrency: int = 4
     append_chunks: bool = False
     table_summary_model: str = "gpt-5-mini"
-    table_summary_max_tokens: int = 80
-    table_summary_temperature: float = 0.2
+    table_summary_max_tokens: int = 200
+    table_summary_concurrency: int = 50
 
 
 @dataclass(slots=True)
@@ -163,7 +163,7 @@ class IngestionPipeline:
             api_base=self.config.openai_api_base,
             model=self.config.table_summary_model,
             max_tokens=self.config.table_summary_max_tokens,
-            temperature=self.config.table_summary_temperature,
+            max_concurrency=self.config.table_summary_concurrency,
         )
 
         for doc_index, parsed in enumerate(parsed_docs):
@@ -192,8 +192,8 @@ class IngestionPipeline:
                 chunk.metadata.update({"chunk_id": chunk_id, "chunk_type": "text"})
                 chunk_items.append((chunk_id, chunk))
 
-            for table_index, table in enumerate(parsed.tables):
-                table_context = context_generator.generate(
+            table_requests = [
+                TableContextRequest(
                     table=table,
                     company=company,
                     year=year,
@@ -201,7 +201,17 @@ class IngestionPipeline:
                     heuristics_sentence=table.context,
                     surrounding_text=table.caption,
                 )
+                for table in parsed.tables
+            ]
+            table_contexts = (
+                context_generator.generate_bulk(table_requests) if table_requests else []
+            )
 
+            if table_requests and len(table_contexts) != len(table_requests):
+                raise RuntimeError("Table context generation count mismatch.")
+
+            for table_index, (table, table_context) in enumerate(zip(parsed.tables, table_contexts)):
+                request = table_requests[table_index]
                 table_metadata = {
                     **base_metadata,
                     "table_id": table.table_id,
@@ -209,6 +219,8 @@ class IngestionPipeline:
                     "caption": table.caption,
                     "table_context": table_context,
                     "chunk_type": "table",
+                    "nearby_text": request.heuristics_sentence,
+                    "surrounding_details": request.surrounding_text,
                 }
 
                 row_chunks = chunk_table_rows(table.rows or [], base_metadata=table_metadata)
@@ -229,6 +241,8 @@ class IngestionPipeline:
                         "page_range": table.page_range,
                         "caption": table.caption,
                         "rows": table.rows,
+                        "nearby_text": request.heuristics_sentence,
+                        "surrounding_details": request.surrounding_text,
                     }
                 )
 

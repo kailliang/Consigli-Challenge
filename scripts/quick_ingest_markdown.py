@@ -34,6 +34,19 @@ ENV_LOCATIONS: Tuple[Path, ...] = (ROOT / "backend" / ".env", ROOT / ".env")
 DOC_SUFFIXES = {".md", ".pdf", ".docx"}
 
 
+def _configure_logging(level_name: str) -> None:
+    """Configure logging with compact debug output that highlights key details."""
+
+    level = getattr(logging, level_name.upper(), logging.INFO)
+    # When debugging, keep output to bare messages so only key facts surface.
+    format_str = "%(message)s" if level <= logging.DEBUG else "%(asctime)s %(levelname)s %(name)s - %(message)s"
+    logging.basicConfig(level=level, format=format_str)
+
+    # Suppress verbose dependency logs that drown out the useful debug lines.
+    for noisy_logger in ("httpx", "urllib3", "openai"):
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
+
 def _load_env_files(locations: Iterable[Path]) -> None:
     for location in locations:
         if not location.exists():
@@ -184,13 +197,7 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    try:
-        logging.basicConfig(
-            level=getattr(logging, args.log_level.upper(), logging.INFO),
-            format="%(asctime)s %(levelname)s %(name)s - %(message)s",
-        )
-    except Exception:
-        logging.basicConfig(level=logging.INFO)
+    _configure_logging(args.log_level)
 
     _load_env_files(ENV_LOCATIONS)
 

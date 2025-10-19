@@ -141,6 +141,7 @@ def _extract_markdown_tables(
                 "row_count": len(structured_rows),
                 "column_count": len(headers),
                 "rows": structured_rows,
+                "raw_table": "\n".join(buffer),
             }
         )
         end_index = buffer_end if buffer_end is not None else buffer_start
@@ -442,6 +443,7 @@ def _extract_html_tables(
                 "row_count": len(data_rows),
                 "column_count": len(headers),
                 "rows": data_rows,
+                "raw_table": table_html.strip(),
             }
         )
 
