@@ -9,7 +9,7 @@ from chromadb import PersistentClient
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 
-from app.core.config import get_settings
+from app.core.config import AppSettings, get_settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -53,20 +53,32 @@ def get_collection(
     return collection
 
 
-def get_langchain_vectorstore(collection_name: str | None = None) -> Chroma:
-    """Return a LangChain-ready Chroma vector store."""
+def create_embeddings(settings: AppSettings | None = None) -> OpenAIEmbeddings:
+    """Instantiate an OpenAI embeddings client using application settings."""
 
-    settings = get_settings()
-    collection = collection_name or settings.vector_collection_name
+    settings = settings or get_settings()
 
     if not settings.openai_api_key:
         raise RuntimeError("OpenAI API key required for vector store embeddings.")
 
-    embeddings = OpenAIEmbeddings(
+    return OpenAIEmbeddings(
         model=settings.embeddings_model,
         openai_api_key=settings.openai_api_key,
         openai_api_base=settings.openai_api_base,
     )
+
+
+def get_langchain_vectorstore(
+    collection_name: str | None = None,
+    *,
+    settings: AppSettings | None = None,
+    embeddings: OpenAIEmbeddings | None = None,
+) -> Chroma:
+    """Return a LangChain-ready Chroma vector store."""
+
+    settings = settings or get_settings()
+    collection = collection_name or settings.vector_collection_name
+    embeddings = embeddings or create_embeddings(settings)
 
     persist_dir = _resolve_persist_dir(settings.chroma_persist_dir)
 
@@ -76,4 +88,3 @@ def get_langchain_vectorstore(collection_name: str | None = None) -> Chroma:
         persist_directory=str(persist_dir),
     )
     return vectorstore
-

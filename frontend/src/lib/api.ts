@@ -21,7 +21,8 @@ const messageSchema = z.object({
   role: z.enum(["assistant", "user", "system"]),
   content: z.string(),
   created_at: z.string(),
-  citations: z.array(citationSchema).optional()
+  citations: z.array(citationSchema).optional(),
+  metadata: z.record(z.any()).optional()
 });
 
 const streamEventSchema = z.object({
@@ -41,7 +42,8 @@ const toChatMessage = (backend: z.infer<typeof messageSchema>): ChatMessage => (
       page: citation.page ?? undefined,
       snippet: citation.snippet,
       section: citation.section ?? undefined
-    })) ?? []
+    })) ?? [],
+  metadata: backend.metadata ?? undefined
 });
 
 const resolveWsUrl = (): string => {

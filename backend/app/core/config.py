@@ -21,6 +21,13 @@ class AppSettings(BaseSettings):
 
     embeddings_model: str = Field(default="text-embedding-3-small")
     llm_model: str = Field(default="gpt-5-mini")
+    retrieval_decider_model: str = Field(default="gpt-4o-mini")
+    query_expansion_model: str = Field(default="gpt-4o-mini")
+
+    gating_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
+    query_expansion_temperature: float = Field(default=0.2, ge=0.0, le=1.0)
+    query_expansion_count: int = Field(default=5, ge=3, le=10)
+    rerank_top_k: int = Field(default=10, ge=1, le=20)
 
     chroma_persist_dir: str = Field(default="./data/chroma")
     structured_db_url: str = Field(default="sqlite+aiosqlite:///./data/metrics.db")

@@ -14,6 +14,7 @@ export type ChatMessage = {
   content: string;
   createdAt: string;
   citations?: Citation[];
+  metadata?: Record<string, unknown>;
 };
 
 export type ChatInputPayload = {
