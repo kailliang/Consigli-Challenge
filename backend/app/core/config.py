@@ -37,6 +37,12 @@ class AppSettings(BaseSettings):
 
     ingest_bucket_path: str = Field(default="./data/ingest")
     enable_tracing: bool = Field(default=True)
+    cors_allowed_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ]
+    )
 
 
 @lru_cache

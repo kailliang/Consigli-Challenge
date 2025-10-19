@@ -143,23 +143,51 @@ def _extract_html_tables(
         if not rows:
             continue
 
-        header_cells = _CELL_RE.findall(rows[0])
-        headers = [
-            (_strip_html(cell) or f"col_{idx}")
-            for idx, cell in enumerate(header_cells)
+        parsed_rows: list[list[str]] = [
+            [_strip_html(cell) for cell in _CELL_RE.findall(row_html)]
+            for row_html in rows
         ]
-        if not headers:
+        if not parsed_rows:
             continue
 
+        max_cols = max(len(row) for row in parsed_rows)
+
+        def pad(row: list[str]) -> list[str]:
+            return row + [""] * (max_cols - len(row))
+
+        normalized_rows = [pad(row) for row in parsed_rows]
+
+        header_rows: list[list[str]] = []
+        data_start = len(normalized_rows)
+        for idx, row in enumerate(normalized_rows):
+            first_cell = row[0].strip() if row else ""
+            if idx == 0 or not first_cell:
+                header_rows.append(row)
+            else:
+                data_start = idx
+                break
+
+        data_rows_raw = normalized_rows[data_start:]
+        if not data_rows_raw:
+            data_rows_raw = normalized_rows[len(header_rows):]
+
+        headers: list[str] = []
+        for col in range(max_cols):
+            header_value = ""
+            for header_row in header_rows:
+                candidate = header_row[col].strip()
+                if candidate:
+                    header_value = candidate
+            if not header_value:
+                header_value = "category" if col == 0 else f"column_{col}"
+            headers.append(header_value)
+
         data_rows: list[dict[str, str]] = []
-        for row_html in rows[1:]:
-            cells = _CELL_RE.findall(row_html)
-            if not cells:
-                continue
+        for row in data_rows_raw:
             row_dict: dict[str, str] = {}
             has_value = False
             for idx, header in enumerate(headers):
-                value = _strip_html(cells[idx]) if idx < len(cells) else ""
+                value = row[idx].strip()
                 if value:
                     has_value = True
                 row_dict[header] = value

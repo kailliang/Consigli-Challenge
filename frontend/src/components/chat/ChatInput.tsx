@@ -17,8 +17,14 @@ export const ChatInput = ({ onSubmit, disabled = false }: ChatInputProps) => {
       return;
     }
 
-    await onSubmit(prompt);
+    const previousValue = value;
     setValue("");
+    try {
+      await onSubmit(prompt);
+    } catch (error) {
+      setValue(previousValue);
+      throw error;
+    }
   };
 
   return (

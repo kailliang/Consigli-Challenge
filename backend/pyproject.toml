@@ -30,7 +30,9 @@ dependencies = [
   "tenacity>=8.4.2",
   "structlog>=24.2.0",
   "orjson>=3.10.3",
-  "langsmith>=0.1.77"
+  "langsmith>=0.1.77",
+  "aiosqlite>=0.19.0",
+  "greenlet>=3.0.3",
 ]
 
 [project.optional-dependencies]
@@ -38,8 +40,7 @@ dev = [
   "ruff>=0.6.3",
   "pytest>=8.3.2",
   "pytest-asyncio>=0.23.8",
-  "mypy>=1.11.2",
-  "types-orjson>=3.6.2.20240801"
+  "mypy>=1.11.2"
 ]
 
 [tool.hatch.metadata]

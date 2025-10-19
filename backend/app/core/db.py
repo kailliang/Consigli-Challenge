@@ -4,13 +4,32 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from .config import get_settings
 
 _async_engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _resolve_structured_db_url(raw_url: str) -> str:
+    """Ensure SQLite URLs point at the repository-level data directory."""
+
+    url = make_url(raw_url)
+    if "sqlite" not in url.drivername or url.database is None:
+        return raw_url
+
+    db_path = Path(url.database)
+    if not db_path.is_absolute():
+        db_path = (_REPO_ROOT / db_path).resolve()
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    url = url.set(database=str(db_path))
+    return str(url)
 
 
 def get_engine() -> AsyncEngine:
@@ -19,7 +38,8 @@ def get_engine() -> AsyncEngine:
     global _async_engine
     if _async_engine is None:
         settings = get_settings()
-        _async_engine = create_async_engine(settings.structured_db_url, echo=False, future=True)
+        resolved_url = _resolve_structured_db_url(settings.structured_db_url)
+        _async_engine = create_async_engine(resolved_url, echo=False, future=True)
     return _async_engine
 
 

@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import uuid
-
 import json
+import uuid
+from json import JSONDecodeError
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import ValidationError
 
 from app.api import deps
+from app.core.db import get_session
 from app.models.chat import QueryRequest, QueryResponse
 from app.services import rag
 
@@ -47,33 +48,57 @@ async def query_reports(
     return QueryResponse(message=message, session_id=session_id)
 
 
-@router.post(
-    "/query/stream",
-    status_code=status.HTTP_200_OK,
-    summary="Stream a RAG response via Server-Sent Events.",
-)
-async def query_reports_stream(
-    request: QueryRequest,
+@router.websocket("/query/ws")
+async def query_reports_websocket(
+    websocket: WebSocket,
     rag_context: rag.RAGContext = Depends(deps.get_rag_context),
-    db_session: AsyncSession = Depends(deps.get_db_session),
-) -> StreamingResponse:
-    """Stream analyst answers using SSE."""
+) -> None:
+    """Stream analyst answers over a WebSocket connection."""
+
+    await websocket.accept()
 
     try:
-        validated = deps.validate_query(request)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        while True:
+            try:
+                raw_message = await websocket.receive_text()
+            except WebSocketDisconnect:
+                break
 
-    session_id = validated.session_id or str(uuid.uuid4())
+            try:
+                payload = json.loads(raw_message)
+            except JSONDecodeError:
+                await websocket.send_json({"event": "error", "data": {"message": "Invalid JSON payload."}})
+                continue
 
-    async def event_generator():
-        async for event in rag.stream_response(
-            validated.prompt,
-            session_id=session_id,
-            context=rag_context,
-            db_session=db_session,
-        ):
-            payload = json.dumps(event)
-            yield f"data: {payload}\n\n"
+            try:
+                request = QueryRequest(**payload)
+                validated = deps.validate_query(request)
+            except (ValidationError, ValueError) as exc:
+                await websocket.send_json({"event": "error", "data": {"message": str(exc)}})
+                continue
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+            session_id = validated.session_id or str(uuid.uuid4())
+
+            try:
+                async with get_session() as db_session:
+                    async for event in rag.stream_response(
+                        validated.prompt,
+                        session_id=session_id,
+                        context=rag_context,
+                        db_session=db_session,
+                    ):
+                        await websocket.send_json(event)
+            except WebSocketDisconnect:
+                break
+            except Exception as exc:  # pragma: no cover - defensive logging
+                await websocket.send_json(
+                    {
+                        "event": "error",
+                        "data": {"message": "Query processing failed. Please retry.", "detail": str(exc)},
+                    }
+                )
+    finally:
+        try:
+            await websocket.close()
+        except RuntimeError:
+            pass

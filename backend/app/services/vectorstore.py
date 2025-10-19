@@ -15,6 +15,18 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 _client: PersistentClient | None = None
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _resolve_persist_dir(raw_path: str | Path) -> Path:
+    """Convert configured paths to absolute locations under the project root."""
+
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+
+    resolved = (_REPO_ROOT / path).resolve()
+    return resolved
 
 
 def get_vector_client() -> PersistentClient:
@@ -23,7 +35,7 @@ def get_vector_client() -> PersistentClient:
     global _client
     if _client is None:
         settings = get_settings()
-        persist_dir = Path(settings.chroma_persist_dir)
+        persist_dir = _resolve_persist_dir(settings.chroma_persist_dir)
         persist_dir.mkdir(parents=True, exist_ok=True)
         logger.info("vectorstore.init", persist_dir=str(persist_dir))
         _client = PersistentClient(path=str(persist_dir))
@@ -56,9 +68,11 @@ def get_langchain_vectorstore(collection_name: str | None = None) -> Chroma:
         openai_api_base=settings.openai_api_base,
     )
 
+    persist_dir = _resolve_persist_dir(settings.chroma_persist_dir)
+
     vectorstore = Chroma(
         collection_name=collection,
         embedding_function=embeddings,
-        persist_directory=settings.chroma_persist_dir,
+        persist_directory=str(persist_dir),
     )
     return vectorstore

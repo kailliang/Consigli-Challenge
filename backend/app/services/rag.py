@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from textwrap import shorten
 from typing import Any, Iterable
 
+import asyncio
 from collections.abc import AsyncIterator
 import re
 
@@ -159,7 +160,7 @@ async def stream_response(
 
     if isinstance(retrieval, ChatMessage):
         yield {"event": "token", "data": {"content": retrieval.content}}
-        yield {"event": "done", "data": {"session_id": session_id, "message": retrieval.model_dump()}}
+        yield {"event": "done", "data": {"session_id": session_id, "message": retrieval.model_dump(mode='json')}}
         return
 
     documents, table_lookup, context_text = retrieval
@@ -179,10 +180,25 @@ async def stream_response(
             accumulated.append(token)
             yield {"event": "token", "data": {"content": token}}
     except Exception as exc:  # pragma: no cover
+        if _streaming_not_allowed(exc):
+            logger.warning("rag.streaming.unsupported", error=str(exc))
+            message = await generate_response(
+                prompt_text,
+                session_id=session_id,
+                context=context,
+                db_session=db_session,
+            )
+            yield {"event": "token", "data": {"content": message.content}}
+            yield {
+                "event": "done",
+                "data": {"session_id": session_id, "message": message.model_dump(mode='json')},
+            }
+            return
+
         logger.exception("rag.streaming.error", exc_info=exc)
         message = _placeholder_response("Streaming failed unexpectedly. Please retry.")
         yield {"event": "token", "data": {"content": message.content}}
-        yield {"event": "done", "data": {"session_id": session_id, "message": message.model_dump()}}
+        yield {"event": "done", "data": {"session_id": session_id, "message": message.model_dump(mode='json')}}
         return
 
     final_content = "".join(accumulated)
@@ -199,7 +215,7 @@ async def stream_response(
         citations=citations,
     )
 
-    yield {"event": "done", "data": {"session_id": session_id, "message": message.model_dump()}}
+    yield {"event": "done", "data": {"session_id": session_id, "message": message.model_dump(mode='json')}}
 
 
 async def _prepare_retrieval(
@@ -209,10 +225,27 @@ async def _prepare_retrieval(
     db_session: AsyncSession | None,
 ) -> ChatMessage | tuple[list[Document], dict[str, Any], str]:
     try:
-        documents: list[Document] = await context.retriever.aget_relevant_documents(prompt_text)
+        if hasattr(context.retriever, "aget_relevant_documents"):
+            documents = await context.retriever.aget_relevant_documents(prompt_text)  # type: ignore[assignment]
+        elif hasattr(context.retriever, "get_relevant_documents"):
+            documents = await asyncio.to_thread(
+                context.retriever.get_relevant_documents,  # type: ignore[arg-type]
+                prompt_text,
+            )
+        elif hasattr(context.retriever, "ainvoke"):
+            documents = await context.retriever.ainvoke(prompt_text)  # type: ignore[assignment]
+        else:
+            documents = await asyncio.to_thread(
+                context.retriever.invoke,  # type: ignore[arg-type]
+                prompt_text,
+            )
     except Exception as exc:  # pragma: no cover - external dependency
         logger.exception("rag.retriever.error", exc_info=exc)
         return _placeholder_response("Retriever failed to fetch supporting context. Please retry later.")
+
+    if isinstance(documents, Document):
+        documents = [documents]
+    documents = list(documents or [])
 
     if not documents:
         return _placeholder_response("No relevant context found for that query.")
@@ -300,6 +333,15 @@ def _build_citations(documents: Iterable[Document], table_lookup: dict[str, Any]
         )
 
     return citations
+
+
+def _streaming_not_allowed(exc: Exception) -> bool:
+    message = str(exc).lower()
+    if "must be verified to stream this model" in message:
+        return True
+    if "unsupported_value" in message and "stream" in message:
+        return True
+    return False
 
 
 def _apply_numeric_validation(

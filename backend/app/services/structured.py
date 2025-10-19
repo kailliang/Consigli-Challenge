@@ -9,8 +9,12 @@ import re
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import OperationalError
 
+from app.core.logging import get_logger
 from app.models.tables import TableSummary
+
+logger = get_logger(__name__)
 
 
 async def fetch_tables_by_ids(
@@ -25,7 +29,14 @@ async def fetch_tables_by_ids(
         return {}
 
     stmt = select(TableSummary).where(TableSummary.table_id.in_(ids))
-    results = await session.scalars(stmt)
+    try:
+        results = await session.scalars(stmt)
+    except OperationalError as exc:
+        message = str(getattr(exc.orig, "args", [""])[0] if getattr(exc, "orig", None) else exc)
+        if "no such table" in message.lower():
+            logger.warning("structured.fetch_tables.missing_table", error=message)
+            return {}
+        raise
     return {row.table_id: row for row in results}
 
 
@@ -45,7 +56,14 @@ async def fetch_recent_tables(
     if year:
         stmt = stmt.where(TableSummary.year == year)
 
-    results = await session.scalars(stmt)
+    try:
+        results = await session.scalars(stmt)
+    except OperationalError as exc:
+        message = str(getattr(exc.orig, "args", [""])[0] if getattr(exc, "orig", None) else exc)
+        if "no such table" in message.lower():
+            logger.warning("structured.fetch_recent_tables.missing_table", error=message)
+            return []
+        raise
     return list(results)
 
 

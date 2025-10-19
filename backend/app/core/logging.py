@@ -16,10 +16,10 @@ def setup_logging(level: int = logging.INFO) -> None:
 
     structlog.configure(
         processors=[
-            structlog.stdlib.add_log_level,
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
             timestamper,
             structlog.stdlib.filter_by_level,
-            structlog.stdlib.wrap_logger,
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),

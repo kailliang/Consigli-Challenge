@@ -21,7 +21,7 @@ Prototype workspace for a multi-modal retrieval-augmented generation (RAG) syste
 3. Copy `backend/.env.example` to `.env` and populate required keys (OpenAI, LangSmith, storage paths).
 4. Run the API: `uvicorn app.main:app --reload --app-dir backend/app`.
    - JSON endpoint: `POST /v1/query`
-   - Streaming endpoint: `POST /v1/query/stream` (SSE)
+   - Streaming endpoint: `WS /v1/query/ws`
 
 ### Ingestion CLI
 

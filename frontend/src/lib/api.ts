@@ -51,6 +51,13 @@ const toChatMessage = (backend: z.infer<typeof messageSchema>): ChatMessage => (
     })) ?? []
 });
 
+const resolveWsUrl = (): string => {
+  const base = new URL(env.VITE_API_BASE_URL);
+  const protocol = base.protocol === "https:" ? "wss:" : "ws:";
+  const path = base.pathname.endsWith("/") ? base.pathname.slice(0, -1) : base.pathname;
+  return `${protocol}//${base.host}${path}/query/ws`;
+};
+
 export const queryReports = async (
   prompt: string,
   sessionId?: string
@@ -78,79 +85,84 @@ export const queryReports = async (
 
 type StreamCallback = (event: { type: "token"; content: string } | { type: "done"; sessionId: string; message: ChatMessage }) => void;
 
-export const queryReportsStream = async (
+export const queryReportsStream = (
   prompt: string,
   sessionId: string | undefined,
   onEvent: StreamCallback
 ): Promise<{ sessionId: string; message: ChatMessage }> => {
-  const response = await fetch(`${env.VITE_API_BASE_URL}/query/stream`, {
-    method: "POST",
-    headers: {
-      Accept: "text/event-stream",
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ prompt, session_id: sessionId })
-  });
+  const wsUrl = resolveWsUrl();
 
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(detail || "Streaming request failed");
-  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let finalSessionId = sessionId ?? "";
+    let finalMessage: ChatMessage | null = null;
 
-  const reader = response.body?.getReader();
-  if (!reader) {
-    throw new Error("Streaming not supported in this environment");
-  }
+    const socket = new WebSocket(wsUrl);
 
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let finalSessionId = sessionId ?? "";
-  let finalMessage: ChatMessage | null = null;
+    socket.onopen = () => {
+      socket.send(JSON.stringify({ prompt, session_id: sessionId }));
+    };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-
-    buffer += decoder.decode(value, { stream: true });
-
-    let delimiterIndex: number;
-    while ((delimiterIndex = buffer.indexOf("\n\n")) !== -1) {
-      const rawEvent = buffer.slice(0, delimiterIndex).trim();
-      buffer = buffer.slice(delimiterIndex + 2);
-
-      if (!rawEvent.startsWith("data:")) {
-        continue;
+    socket.onmessage = (event) => {
+      let parsed;
+      try {
+        parsed = streamEventSchema.parse(JSON.parse(event.data));
+      } catch {
+        return;
       }
-
-      const payload = rawEvent.slice(5).trim();
-      if (!payload) {
-        continue;
-      }
-
-      const parsed = streamEventSchema.parse(JSON.parse(payload));
 
       if (parsed.event === "token") {
         const content = typeof parsed.data?.content === "string" ? parsed.data.content : "";
         onEvent({ type: "token", content });
+        return;
       }
 
       if (parsed.event === "done") {
-        const backendMessage = messageSchema.parse(parsed.data.message);
-        finalSessionId = typeof parsed.data.session_id === "string" ? parsed.data.session_id : finalSessionId;
-        finalMessage = toChatMessage(backendMessage);
-        onEvent({ type: "done", sessionId: finalSessionId, message: finalMessage });
+        try {
+          const backendMessage = messageSchema.parse(parsed.data.message);
+          finalSessionId = typeof parsed.data.session_id === "string" ? parsed.data.session_id : finalSessionId;
+          finalMessage = toChatMessage(backendMessage);
+          onEvent({ type: "done", sessionId: finalSessionId, message: finalMessage });
+          settled = true;
+          socket.close(1000, "completed");
+          resolve({ sessionId: finalSessionId, message: finalMessage });
+        } catch (error) {
+          settled = true;
+          socket.close(1002, "invalid message");
+          reject(error instanceof Error ? error : new Error("Invalid completion payload"));
+        }
+        return;
       }
-    }
-  }
 
-  if (!finalMessage) {
-    throw new Error("Streaming response ended without completion event");
-  }
+      if (parsed.event === "error") {
+        const detail = typeof parsed.data?.message === "string" ? parsed.data.message : "Streaming error";
+        settled = true;
+        socket.close(1011, "error");
+        reject(new Error(detail));
+      }
+    };
 
-  return {
-    sessionId: finalSessionId,
-    message: finalMessage
-  };
+    socket.onerror = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.close();
+      reject(new Error("WebSocket connection error"));
+    };
+
+    socket.onclose = (event) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (finalMessage) {
+        resolve({ sessionId: finalSessionId, message: finalMessage });
+        return;
+      }
+
+      const reason = event.reason || "WebSocket connection closed unexpectedly";
+      reject(new Error(reason));
+    };
+  });
 };

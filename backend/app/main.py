@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from .api import api_router
 from .core.config import AppSettings, get_settings
@@ -46,6 +47,15 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         redoc_url="/redoc",
         lifespan=lifespan,
     )
+
+    if settings.cors_allowed_origins:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_allowed_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     application.include_router(api_router, prefix="/v1")
 
