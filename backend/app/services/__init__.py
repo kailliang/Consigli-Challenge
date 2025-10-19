@@ -1,5 +1,5 @@
 """Service exports."""
 
-from . import rag, structured, vectorstore
+from . import memory, rag, structured, vectorstore
 
-__all__ = ["rag", "structured", "vectorstore"]
+__all__ = ["memory", "rag", "structured", "vectorstore"]

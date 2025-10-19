@@ -35,21 +35,21 @@ def _split_sentences(text: str) -> list[str]:
 def chunk_text(
     text: str,
     *,
-    chunk_size: int = 800,
-    chunk_overlap: int = 80,
+    chunk_size: int = 400,
+    chunk_overlap: int = 40,
     base_metadata: dict[str, Any] | None = None,
 ) -> list[Chunk]:
     """Chunk narrative text.
 
     Strategy:
-    - Target 600–800 tokens (chunk_size is treated as target_max)
-    - Hard max 1000 tokens
-    - Overlap 60–100 tokens (sentence-level)
+    - Target 300–400 tokens (chunk_size is treated as target_max)
+    - Hard max 600 tokens
+    - Overlap 30–50 tokens (sentence-level)
     """
 
     target_max = chunk_size
     target_min = int(0.75 * target_max)
-    max_tokens = int(1.25 * target_max)
+    max_tokens = 600
     overlap = chunk_overlap
 
     cleaned = _ANCHOR_ID_RE.sub("", text)

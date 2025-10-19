@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -15,11 +16,29 @@ from .core.logging import get_logger, setup_logging
 logger = get_logger(__name__)
 
 
+def _configure_tracing(settings: AppSettings) -> None:
+    """Propagate LangSmith settings into LangChain environment variables."""
+
+    if not settings.enable_tracing:
+        return
+
+    if settings.langsmith_api_key:
+        os.environ.setdefault("LANGCHAIN_API_KEY", settings.langsmith_api_key)
+    if settings.langsmith_endpoint:
+        os.environ.setdefault("LANGCHAIN_ENDPOINT", settings.langsmith_endpoint)
+    if settings.langsmith_project:
+        os.environ.setdefault("LANGCHAIN_PROJECT", settings.langsmith_project)
+
+    if os.environ.get("LANGCHAIN_API_KEY"):
+        os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Lifecycle hooks for startup and shutdown."""
 
     settings = get_settings()
+    _configure_tracing(settings)
     setup_logging()
 
     logger.info(

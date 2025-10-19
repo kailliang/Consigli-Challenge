@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import AppSettings, get_settings
 from app.core.logging import get_logger
 from app.models.chat import ChatMessage, Citation
-from app.services import structured, vectorstore
+from app.services import memory, structured, vectorstore
 
 logger = get_logger(__name__)
 
@@ -35,6 +35,7 @@ class RAGContext:
     llm: ChatOpenAI | None
     prompt: ChatPromptTemplate | None
     settings: AppSettings
+    memory_store: memory.ConversationMemoryStore | None
 
 
 _context: RAGContext | None = None
@@ -69,18 +70,34 @@ def build_rag_context(settings: AppSettings) -> RAGContext:
                 (
                     "You are an automotive financial analyst. "
                     "Use the provided context to answer with precise numbers and currency units. "
-                    "If context is insufficient, explicitly state the limitation."
+                    "If context is insufficient, explicitly state the limitation. "
+                    "Incorporate relevant details from the conversation memory when it helps clarify the user's intent."
                 ),
             ),
             (
                 "human",
-                "Context:\n{context}\n\nQuestion: {question}",
+                "Conversation memory:\n{memory}\n\nContext:\n{context}\n\nQuestion: {question}",
             ),
         ]
     )
 
     chain: Runnable = prompt | llm | StrOutputParser()
-    return RAGContext(retriever=retriever, chain=chain, llm=llm, prompt=prompt, settings=settings)
+
+    memory_store: memory.ConversationMemoryStore | None = None
+    if settings.memory_max_turns:
+        memory_store = memory.ConversationMemoryStore(
+            max_turns=settings.memory_max_turns,
+            summary_max_chars=settings.memory_summary_max_chars,
+        )
+
+    return RAGContext(
+        retriever=retriever,
+        chain=chain,
+        llm=llm,
+        prompt=prompt,
+        settings=settings,
+        memory_store=memory_store,
+    )
 
 
 def get_rag_context(settings: AppSettings | None = None) -> RAGContext:
@@ -107,6 +124,12 @@ async def generate_response(
     if context.retriever is None or context.chain is None:
         raise RuntimeError("RAG context is not fully initialised.")
 
+    memory_text = "None."
+    memory_store = context.memory_store
+    if memory_store is not None:
+        rendered = memory_store.render(session_id).strip()
+        memory_text = rendered if rendered else "None."
+
     retrieval = await _prepare_retrieval(
         context=context,
         prompt_text=prompt_text,
@@ -114,27 +137,35 @@ async def generate_response(
     )
 
     if isinstance(retrieval, ChatMessage):
+        if memory_store is not None:
+            memory_store.append_turn(session_id, prompt_text, retrieval.content)
         return retrieval
 
     documents, table_lookup, context_text = retrieval
 
     try:
         answer_text: str = await context.chain.ainvoke(
-            {"question": prompt_text, "context": context_text}
+            {"question": prompt_text, "context": context_text, "memory": memory_text}
         )
     except Exception as exc:  # pragma: no cover - external dependency
         logger.exception("rag.generation.error", exc_info=exc)
-        return _placeholder_response("Language model failed to generate a response.")
+        message = _placeholder_response("Language model failed to generate a response.")
+        if memory_store is not None:
+            memory_store.append_turn(session_id, prompt_text, message.content)
+        return message
 
     validated_content, _ = _apply_numeric_validation(answer_text, table_lookup)
     citations = _build_citations(documents, table_lookup)
 
-    return ChatMessage(
+    message = ChatMessage(
         id=str(uuid.uuid4()),
         role="assistant",
         content=validated_content,
         citations=citations,
     )
+    if memory_store is not None:
+        memory_store.append_turn(session_id, prompt_text, message.content)
+    return message
 
 
 async def stream_response(
@@ -146,75 +177,16 @@ async def stream_response(
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream a response event sequence.
 
-    This stub currently streams the final message in one chunk to unblock frontend plumbing.
+    Streaming is currently disabled; return a single chunk response.
     """
 
-    if context.retriever is None or context.chain is None or context.llm is None or context.prompt is None:
-        raise RuntimeError("RAG context is not fully initialised.")
-
-    retrieval = await _prepare_retrieval(
+    message = await generate_response(
+        prompt_text,
+        session_id=session_id,
         context=context,
-        prompt_text=prompt_text,
         db_session=db_session,
     )
-
-    if isinstance(retrieval, ChatMessage):
-        yield {"event": "token", "data": {"content": retrieval.content}}
-        yield {"event": "done", "data": {"session_id": session_id, "message": retrieval.model_dump(mode='json')}}
-        return
-
-    documents, table_lookup, context_text = retrieval
-
-    prompt_value = context.prompt.format_prompt(question=prompt_text, context=context_text)
-    messages = prompt_value.to_messages()
-
-    accumulated: list[str] = []
-
-    try:
-        async for chunk in context.llm.astream(messages):
-            token = getattr(chunk, "content", None)
-            if not token:
-                token = getattr(chunk.message, "content", None)
-            if not token:
-                continue
-            accumulated.append(token)
-            yield {"event": "token", "data": {"content": token}}
-    except Exception as exc:  # pragma: no cover
-        if _streaming_not_allowed(exc):
-            logger.warning("rag.streaming.unsupported", error=str(exc))
-            message = await generate_response(
-                prompt_text,
-                session_id=session_id,
-                context=context,
-                db_session=db_session,
-            )
-            yield {"event": "token", "data": {"content": message.content}}
-            yield {
-                "event": "done",
-                "data": {"session_id": session_id, "message": message.model_dump(mode='json')},
-            }
-            return
-
-        logger.exception("rag.streaming.error", exc_info=exc)
-        message = _placeholder_response("Streaming failed unexpectedly. Please retry.")
-        yield {"event": "token", "data": {"content": message.content}}
-        yield {"event": "done", "data": {"session_id": session_id, "message": message.model_dump(mode='json')}}
-        return
-
-    final_content = "".join(accumulated)
-    validated_content, suffix = _apply_numeric_validation(final_content, table_lookup)
-
-    if suffix:
-        yield {"event": "token", "data": {"content": suffix}}
-
-    citations = _build_citations(documents, table_lookup)
-    message = ChatMessage(
-        id=str(uuid.uuid4()),
-        role="assistant",
-        content=validated_content,
-        citations=citations,
-    )
-
+    yield {"event": "token", "data": {"content": message.content}}
     yield {"event": "done", "data": {"session_id": session_id, "message": message.model_dump(mode='json')}}
 
 
@@ -402,4 +374,3 @@ def _placeholder_response(message: str) -> ChatMessage:
         content=message,
         citations=[],
     )
-

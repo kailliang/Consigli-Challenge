@@ -32,8 +32,8 @@ dev = [
   "pytest>=8.3.2"
 ]
 
-[project.scripts]
-ingest-cli = "ingest.cli:app"
+#[project.scripts]
+# Removed CLI entry in favor of unified script in scripts/quick_ingest_markdown.py
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ingest"]

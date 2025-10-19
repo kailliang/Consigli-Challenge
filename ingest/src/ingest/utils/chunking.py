@@ -1,8 +1,8 @@
 """Sentence-level text chunking with token estimates.
 
 Implements the updated strategy:
-- Target chunk size: 600–800 tokens; hard max 1000 tokens
-- Overlap: 60–100 tokens (sentence-level)
+- Target chunk size: 300–400 tokens; hard max 600 tokens
+- Overlap: 30–50 tokens (sentence-level)
 - Do not split tables (handled by caller)
 """
 
@@ -37,10 +37,10 @@ def split_sentences(text: str) -> list[str]:
 
 @dataclass(slots=True)
 class ChunkConfig:
-    target_min_tokens: int = 600
-    target_max_tokens: int = 800
-    max_tokens: int = 1000
-    overlap_tokens: int = 80  # 60–100
+    target_min_tokens: int = 300
+    target_max_tokens: int = 400
+    max_tokens: int = 600
+    overlap_tokens: int = 40  # 30–50
 
 
 @dataclass(slots=True)

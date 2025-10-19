@@ -60,9 +60,9 @@ class PipelineConfig:
     currency: str | None = None
     reporting_basis: str | None = None
     dry_run: bool = False
-    # Updated strategy: 600–800 target, max 1000, overlap 60–100
-    chunk_size: int = 800
-    chunk_overlap: int = 80
+    # Updated strategy: 300–400 target, max 600, overlap 30–50
+    chunk_size: int = 400
+    chunk_overlap: int = 40
     embedding_model: str = "text-embedding-3-small"
     chroma_path: Path = Path("./data/chroma")
     structured_db_path: Path = Path("./data/metrics.db")
