@@ -24,17 +24,10 @@ const messageSchema = z.object({
   citations: z.array(citationSchema).optional()
 });
 
-const queryResponseSchema = z.object({
-  session_id: z.string(),
-  message: messageSchema
-});
-
 const streamEventSchema = z.object({
   event: z.string(),
   data: z.record(z.any())
 });
-
-export type QueryResponse = z.infer<typeof queryResponseSchema>;
 
 const toChatMessage = (backend: z.infer<typeof messageSchema>): ChatMessage => ({
   id: backend.id,
@@ -56,31 +49,6 @@ const resolveWsUrl = (): string => {
   const protocol = base.protocol === "https:" ? "wss:" : "ws:";
   const path = base.pathname.endsWith("/") ? base.pathname.slice(0, -1) : base.pathname;
   return `${protocol}//${base.host}${path}/query/ws`;
-};
-
-export const queryReports = async (
-  prompt: string,
-  sessionId?: string
-): Promise<{ sessionId: string; message: ChatMessage }> => {
-  const response = await fetch(`${env.VITE_API_BASE_URL}/query`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ prompt, session_id: sessionId })
-  });
-
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(detail || "Query failed");
-  }
-
-  const data = queryResponseSchema.parse(await response.json());
-
-  return {
-    sessionId: data.session_id,
-    message: toChatMessage(data.message)
-  };
 };
 
 type StreamCallback = (event: { type: "token"; content: string } | { type: "done"; sessionId: string; message: ChatMessage }) => void;

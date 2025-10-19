@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from html import unescape
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,21 +20,37 @@ class MarkdownParseResult:
 
 def parse_markdown(path: Path) -> MarkdownParseResult:
     text = path.read_text(encoding="utf-8")
-    lines = text.splitlines()
+    segments = text.splitlines(keepends=True)
+    lines = [segment.rstrip("\r\n") for segment in segments]
 
-    tables, _ = _extract_markdown_tables(lines, path)
-    html_tables, _ = _extract_html_tables(text, path, start_index=len(tables))
-    tables.extend(html_tables)
+    markdown_tables, table_index, markdown_ranges = _extract_markdown_tables(lines, path)
+    html_tables, table_index, html_spans = _extract_html_tables(text, path, start_index=table_index)
+    tables = markdown_tables + html_tables
+
     sections = _extract_sections(lines)
 
     # Markdown files lack pages; treat entire file as one logical page.
     page_count = max(1, len(sections))
 
+    line_offsets = _compute_line_offsets(segments)
+    html_line_ranges = _convert_spans_to_line_ranges(html_spans, line_offsets, len(lines))
+
+    lines_to_skip: set[int] = set()
+    for start, end in markdown_ranges:
+        lines_to_skip.update(range(start, end + 1))
+    for start, end in html_line_ranges:
+        lines_to_skip.update(range(start, end + 1))
+
+    sanitized_segments = [
+        segment for idx, segment in enumerate(segments) if idx not in lines_to_skip
+    ]
+    sanitized_text = "".join(sanitized_segments)
+
     return MarkdownParseResult(
         page_count=page_count,
         tables=tables,
         sections=sections,
-        full_text=text,
+        full_text=sanitized_text,
     )
 
 
@@ -62,32 +79,47 @@ def _extract_markdown_tables(
     path: Path,
     *,
     start_index: int = 0,
-) -> Tuple[list[dict[str, Any]], int]:
+) -> Tuple[list[dict[str, Any]], int, list[tuple[int, int]]]:
     tables: list[dict[str, Any]] = []
     buffer: list[str] = []
     in_table = False
     table_index = start_index
+    table_ranges: list[tuple[int, int]] = []
+    buffer_start: int | None = None
+    buffer_end: int | None = None
 
     def flush_buffer() -> None:
-        nonlocal buffer, in_table, table_index
-        if not buffer:
+        nonlocal buffer, in_table, table_index, buffer_start, buffer_end
+        if not buffer or buffer_start is None:
+            buffer = []
+            buffer_start = None
+            buffer_end = None
+            in_table = False
             return
         header_line = buffer[0]
-        delimiter_line = buffer[1] if len(buffer) > 1 else ""
         if "|" not in header_line:
             buffer = []
+            buffer_start = None
+            buffer_end = None
             in_table = False
             return
         headers = [cell.strip() or f"col_{idx}" for idx, cell in enumerate(header_line.split("|")) if cell.strip()]
         if not headers:
             buffer = []
+            buffer_start = None
+            buffer_end = None
             in_table = False
             return
         data_rows = [row for row in buffer[2:] if row.strip()]
         structured_rows: list[dict[str, str]] = []
         for row in data_rows:
             values = [cell.strip() for cell in row.split("|") if cell.strip()]
-            structured_rows.append({headers[idx] if idx < len(headers) else f"col_{idx}": values[idx] if idx < len(values) else "" for idx in range(len(headers))})
+            structured_rows.append(
+                {
+                    headers[idx] if idx < len(headers) else f"col_{idx}": values[idx] if idx < len(values) else ""
+                    for idx in range(len(headers))
+                }
+            )
         table_index += 1
         tables.append(
             {
@@ -99,12 +131,20 @@ def _extract_markdown_tables(
                 "rows": structured_rows,
             }
         )
+        end_index = buffer_end if buffer_end is not None else buffer_start
+        table_ranges.append((buffer_start, end_index))
         buffer = []
+        buffer_start = None
+        buffer_end = None
         in_table = False
 
-    for line in lines:
+    for idx, line in enumerate(lines):
         if "|" in line:
+            if not in_table:
+                buffer = []
+                buffer_start = idx
             buffer.append(line)
+            buffer_end = idx
             in_table = True
         else:
             if in_table:
@@ -114,7 +154,7 @@ def _extract_markdown_tables(
     if in_table:
         flush_buffer()
 
-    return tables, table_index
+    return tables, table_index, table_ranges
 
 
 _TABLE_RE = re.compile(r"<table.*?>.*?</table>", re.IGNORECASE | re.DOTALL)
@@ -133,12 +173,14 @@ def _extract_html_tables(
     path: Path,
     *,
     start_index: int = 0,
-) -> Tuple[list[dict[str, Any]], int]:
+) -> Tuple[list[dict[str, Any]], int, list[tuple[int, int]]]:
     tables: list[dict[str, Any]] = []
     table_index = start_index
+    spans: list[tuple[int, int]] = []
 
     for table_match in _TABLE_RE.finditer(text):
         table_html = table_match.group(0)
+        spans.append(table_match.span())
         rows = _ROW_RE.findall(table_html)
         if not rows:
             continue
@@ -206,4 +248,37 @@ def _extract_html_tables(
             }
         )
 
-    return tables, table_index
+    return tables, table_index, spans
+
+
+def _compute_line_offsets(segments: list[str]) -> list[int]:
+    offsets: list[int] = []
+    current = 0
+    for segment in segments:
+        offsets.append(current)
+        current += len(segment)
+    return offsets
+
+
+def _convert_spans_to_line_ranges(
+    spans: list[tuple[int, int]],
+    line_offsets: list[int],
+    line_count: int,
+) -> list[tuple[int, int]]:
+    if not spans or line_count == 0:
+        return []
+
+    def offset_to_index(offset: int) -> int:
+        idx = bisect_right(line_offsets, offset) - 1
+        if idx < 0:
+            return 0
+        if idx >= line_count:
+            return line_count - 1
+        return idx
+
+    ranges: list[tuple[int, int]] = []
+    for start, end in spans:
+        start_idx = offset_to_index(start)
+        end_idx = offset_to_index(max(start, end - 1))
+        ranges.append((start_idx, end_idx))
+    return ranges

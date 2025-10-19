@@ -3,7 +3,7 @@ import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import type { ChatMessage, ChatSession } from "@/lib/types";
-import { queryReports, queryReportsStream } from "@/lib/api";
+import { queryReportsStream } from "@/lib/api";
 
 const createInitialAssistantMessage = (): ChatMessage => ({
   id: crypto.randomUUID(),
@@ -96,41 +96,24 @@ export const useChatSession = () => {
         }
       });
 
-      if (streamCompleted) {
-        setIsStreaming(false);
-        return;
+      if (!streamCompleted) {
+        finalizeAssistant(result.sessionId, result.message);
       }
-
-      finalizeAssistant(result.sessionId, result.message);
     } catch (streamError) {
-      try {
-        const { sessionId: serverSessionId, message } = await queryReports(trimmedPrompt, sessionId);
-        finalizeAssistant(serverSessionId, message);
-      } catch (fallbackError) {
-        const assistantMessage: ChatMessage = {
-          id: assistantMessageId,
-          role: "assistant",
-          content: "Something went wrong while querying the analyst. Please try again shortly.",
-          createdAt: new Date().toISOString()
-        };
+      const assistantMessage: ChatMessage = {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "Something went wrong while querying the analyst. Please try again shortly.",
+        createdAt: new Date().toISOString()
+      };
 
-        finalizeAssistant(sessionId ?? session.sessionId, assistantMessage);
-
-        const message = fallbackError instanceof Error ? fallbackError.message : "Unknown error";
-        toast.error(message);
-      } finally {
-        setIsStreaming(false);
-      }
+      finalizeAssistant(sessionId, assistantMessage);
 
       const message = streamError instanceof Error ? streamError.message : "Unknown error";
-      if (!streamCompleted) {
-        toast.message("Streaming not available", { description: message });
-      }
-
-      return;
+      toast.error(message);
+    } finally {
+      setIsStreaming(false);
     }
-
-    setIsStreaming(false);
   }, [session.sessionId]);
 
   const resetSession = useCallback(() => {

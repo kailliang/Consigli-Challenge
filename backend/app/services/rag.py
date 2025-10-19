@@ -402,3 +402,4 @@ def _placeholder_response(message: str) -> ChatMessage:
         content=message,
         citations=[],
     )
+

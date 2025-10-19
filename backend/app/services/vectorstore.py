@@ -76,3 +76,4 @@ def get_langchain_vectorstore(collection_name: str | None = None) -> Chroma:
         persist_directory=str(persist_dir),
     )
     return vectorstore
+

@@ -33,7 +33,7 @@ class AppSettings(BaseSettings):
     memory_max_turns: int = Field(default=10, ge=1, le=20)
 
     vector_collection_name: str = Field(default="annual-reports")
-    retriever_k: int = Field(default=6, ge=1, le=20)
+    retriever_k: int = Field(default=12, ge=1, le=20)
 
     ingest_bucket_path: str = Field(default="./data/ingest")
     enable_tracing: bool = Field(default=True)
