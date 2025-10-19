@@ -111,12 +111,34 @@ def chunk_table_rows(rows: list[dict[str, Any]], *, base_metadata: dict[str, Any
 
     meta = base_metadata or {}
     table_id = meta.get("table_id", "table")
+    company = meta.get("company")
+    year = meta.get("year")
+    document_name = meta.get("document_name")
+    page_range = meta.get("page_range")
+    table_context = meta.get("table_context")
+    caption = meta.get("caption")
 
     header_keys: list[str] = list(rows[0].keys()) if rows else []
     preview_rows = rows  # assume tables are not very large per requirement
-    lines = [
-        f"Table {table_id} | Columns: {', '.join(header_keys)} | Rows: {len(rows)}",
-        *[", ".join(f"{k}={v}" for k, v in row.items()) for row in preview_rows],
-    ]
+    header_parts = [f"Table {table_id}"]
+    if company:
+        header_parts.append(f"company={company}")
+    if year is not None:
+        header_parts.append(f"year={year}")
+    if document_name:
+        header_parts.append(f"source={document_name}")
+    if page_range:
+        header_parts.append(f"page={page_range}")
+
+    lines = [" | ".join(header_parts)]
+
+    if table_context:
+        lines.append(f"context: {table_context}")
+    if caption:
+        lines.append(f"caption: {caption}")
+
+    lines.append(f"Columns: {', '.join(header_keys)} | Rows: {len(rows)}")
+    lines.extend(", ".join(f"{k}={v}" for k, v in row.items()) for row in preview_rows)
+
     text = "\n".join(lines)
     return [Chunk(text=text, metadata={**meta, "token_estimate": _estimate_tokens(text)})]

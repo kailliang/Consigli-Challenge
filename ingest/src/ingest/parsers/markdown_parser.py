@@ -7,7 +7,7 @@ from bisect import bisect_right
 from html import unescape
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any, Iterable, Sequence, Tuple
 
 
 @dataclass(slots=True)
@@ -121,10 +121,22 @@ def _extract_markdown_tables(
                 }
             )
         table_index += 1
+        context, surrounding_sentences = _select_context_sentence(
+            lines=lines,
+            table_start=buffer_start or 0,
+            table_end=buffer_end if buffer_end is not None else (buffer_start or 0),
+            headers=headers,
+            rows=structured_rows,
+        )
+        caption = _build_caption(
+            surrounding_sentences=surrounding_sentences,
+            heading=_find_nearest_heading(lines, buffer_start or 0),
+        )
         tables.append(
             {
                 "table_id": f"{path.stem}-table-{table_index}",
-                "caption": None,
+                "caption": caption,
+                "context": context,
                 "page_range": "1",
                 "row_count": len(structured_rows),
                 "column_count": len(headers),
@@ -161,11 +173,196 @@ _TABLE_RE = re.compile(r"<table.*?>.*?</table>", re.IGNORECASE | re.DOTALL)
 _ROW_RE = re.compile(r"<tr.*?>.*?</tr>", re.IGNORECASE | re.DOTALL)
 _CELL_RE = re.compile(r"<t[dh].*?>(.*?)</t[dh]>", re.IGNORECASE | re.DOTALL)
 _TAG_RE = re.compile(r"<.*?>", re.DOTALL)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[\.!?])\s+")
+_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
 
 def _strip_html(value: str) -> str:
     cleaned = _TAG_RE.sub(" ", value)
     return unescape(cleaned).strip()
+
+
+def _select_context_sentence(
+    *,
+    lines: Sequence[str],
+    table_start: int,
+    table_end: int,
+    headers: Sequence[str],
+    rows: Sequence[dict[str, str]],
+    window: int = 6,
+    max_length: int = 100,
+    support_sentences: int = 6,
+) -> tuple[str | None, list[str]]:
+    keywords = _collect_table_keywords(headers, rows)
+
+    before_sentences, after_sentences = _gather_surrounding_sentences(
+        lines=lines,
+        table_start=table_start,
+        table_end=table_end,
+        window=window,
+    )
+
+    ordered_support: list[str] = []
+    ordered_support.extend(reversed(before_sentences))
+    ordered_support.extend(after_sentences)
+    ordered_support = [sentence for sentence in ordered_support if sentence][:support_sentences]
+
+    if not keywords:
+        primary = ordered_support[0] if ordered_support else None
+        return _truncate_text(primary, max_length=max_length) if primary else None, ordered_support
+
+    best_sentence: str | None = None
+    best_score: tuple[int, int] | None = None
+
+    for rank, sentence in enumerate(ordered_support, start=1):
+        tokens = _tokenize(sentence)
+        if not tokens:
+            continue
+        overlap = len(tokens & keywords)
+        numeric_bonus = 1 if any(char.isdigit() for char in sentence) else 0
+        score = (overlap * 10 + numeric_bonus, -rank)
+        if overlap == 0:
+            continue
+        if best_score is None or score > best_score:
+            best_score = score
+            best_sentence = sentence
+
+    if not best_sentence:
+        primary = ordered_support[0] if ordered_support else None
+        truncated = _truncate_text(primary, max_length=max_length) if primary else None
+        return truncated if truncated else None, ordered_support
+
+    truncated = _truncate_text(best_sentence, max_length=max_length)
+    return truncated if truncated else None, ordered_support
+
+
+def _gather_surrounding_sentences(
+    *,
+    lines: Sequence[str],
+    table_start: int,
+    table_end: int,
+    window: int,
+) -> tuple[list[str], list[str]]:
+    before_indices = range(max(0, table_start - window), table_start)
+    before_sentences = _split_sentences(lines, before_indices)
+
+    after_indices = range(table_end + 1, min(len(lines), table_end + 1 + window))
+    after_sentences = _split_sentences(lines, after_indices)
+
+    return before_sentences, after_sentences
+
+
+def _split_sentences(lines: Sequence[str], indices: Iterable[int]) -> list[str]:
+    fragments: list[str] = []
+    for idx in indices:
+        if 0 <= idx < len(lines):
+            text = lines[idx].strip()
+            if text:
+                fragments.append(text)
+    buffer = " ".join(fragments)
+    if not buffer:
+        return []
+    sentences = _SENTENCE_SPLIT_RE.split(buffer)
+    return [sentence.strip() for sentence in sentences if sentence.strip()]
+
+
+def _find_nearest_heading(lines: Sequence[str], table_start: int, search_window: int = 12) -> str | None:
+    limit = max(-1, table_start - search_window)
+    for idx in range(table_start - 1, limit, -1):
+        if idx < 0 or idx >= len(lines):
+            continue
+        raw = lines[idx].strip()
+        if not raw:
+            continue
+        if raw.startswith("#"):
+            value = raw.lstrip("#").strip()
+            if value:
+                return value
+            continue
+        if raw.isupper() and len(raw) <= 80:
+            return raw.title()
+        if raw.endswith(":") and len(raw) <= 120:
+            return raw.rstrip(":").strip()
+    return None
+
+
+def _build_caption(
+    *,
+    surrounding_sentences: Sequence[str],
+    heading: str | None,
+    max_length: int = 220,
+) -> str | None:
+    candidates: list[str] = []
+
+    if heading:
+        heading_clean = heading.strip()
+        if heading_clean:
+            candidates.append(heading_clean)
+
+    for sentence in surrounding_sentences:
+        if not sentence:
+            continue
+        if candidates and sentence.lower() == candidates[-1].lower():
+            continue
+        candidates.append(sentence)
+        if len(candidates) >= 3:
+            break
+
+    if not candidates:
+        return None
+
+    caption = " ".join(candidates).strip()
+    if not caption:
+        return None
+
+    caption = " ".join(caption.split())
+    if len(caption) > max_length:
+        caption = _truncate_text(caption, max_length=max_length)
+    return caption
+
+
+def _collect_table_keywords(headers: Sequence[str], rows: Sequence[dict[str, str]]) -> set[str]:
+    keywords: set[str] = set()
+
+    for header in headers:
+        keywords.update(_tokenize(header))
+
+    if rows:
+        first_row = rows[0]
+        first_key = next(iter(first_row.keys()), "")
+        keywords.update(_tokenize(first_key))
+
+        for row in rows[:3]:
+            if first_key:
+                keywords.update(_tokenize(str(row.get(first_key, ""))))
+
+    return {token for token in keywords if token}
+
+
+def _tokenize(value: str) -> set[str]:
+    return {match.group(0).lower() for match in _TOKEN_RE.finditer(value)}
+
+
+def _truncate_text(sentence: str, *, max_length: int) -> str:
+    sentence = sentence.strip()
+    if len(sentence) <= max_length:
+        return sentence
+
+    words = sentence.split()
+    if not words:
+        return ""
+
+    result_words: list[str] = []
+    total_length = 0
+
+    for word in words:
+        addition = len(word) if not result_words else len(word) + 1
+        if total_length + addition > max_length:
+            break
+        result_words.append(word)
+        total_length += addition
+
+    return " ".join(result_words).strip()
 
 
 def _extract_html_tables(

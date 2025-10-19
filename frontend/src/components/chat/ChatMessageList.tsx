@@ -2,6 +2,7 @@ import type { ChatMessage } from "@/lib/types";
 
 type RetrievalSelection = {
   chunkId?: string;
+  chunkText?: string;
   query?: string;
   score?: number;
 };
@@ -42,9 +43,10 @@ const parseRetrievalMetadata = (metadata?: Record<string, unknown>): RetrievalMe
           }
           const selectionRecord = item as Record<string, unknown>;
           const chunkId = typeof selectionRecord.chunk_id === "string" ? selectionRecord.chunk_id : undefined;
+          const chunkText = typeof selectionRecord.chunk_text === "string" ? selectionRecord.chunk_text : undefined;
           const query = typeof selectionRecord.query === "string" ? selectionRecord.query : undefined;
           const score = typeof selectionRecord.score === "number" ? selectionRecord.score : undefined;
-          return { chunkId, query, score };
+          return { chunkId, chunkText, query, score };
         })
         .filter((entry): entry is RetrievalSelection => entry !== null))
     : undefined;
@@ -70,7 +72,6 @@ export const ChatMessageList = ({ messages, isStreaming }: Props) => {
         const isUser = message.role === "user";
         const retrieval = message.role === "assistant" ? parseRetrievalMetadata(message.metadata as Record<string, unknown> | undefined) : null;
         const selectionCount = retrieval?.selection?.length ?? 0;
-        const expandedQueries = retrieval?.queries ?? [];
 
         return (
           <div
@@ -110,29 +111,19 @@ export const ChatMessageList = ({ messages, isStreaming }: Props) => {
                           ? `Used ${selectionCount} retrieved chunk${selectionCount === 1 ? "" : "s"}.`
                           : "No context chunks were selected."}
                       </p>
-                      {expandedQueries.length > 0 ? (
-                        <div>
-                          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                            Expanded Queries
-                          </div>
-                          <ul className="mt-1 space-y-1 text-slate-400">
-                            {expandedQueries.slice(0, 5).map((query, index) => (
-                              <li key={`${message.id}-query-${index}`} className="leading-snug">
-                                {query}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      ) : null}
                       {retrieval.selection && retrieval.selection.length > 0 ? (
                         <div>
                           <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                             Selected Chunks
                           </div>
-                          <ul className="mt-1 space-y-1 text-slate-400">
+                          <ul className="mt-1 space-y-2 text-slate-400">
                             {retrieval.selection.slice(0, 3).map((entry, index) => (
                               <li key={`${message.id}-selection-${index}`} className="leading-snug">
-                                <span className="font-medium text-slate-300">{entry.chunkId ?? "unknown"}</span>
+                                {entry.chunkText ? (
+                                  <div className="whitespace-pre-wrap text-slate-300">{entry.chunkText}</div>
+                                ) : (
+                                  <span className="font-medium text-slate-300">{entry.chunkId ?? "unknown"}</span>
+                                )}
                                 {typeof entry.score === "number" ? (
                                   <span className="ml-2 text-slate-500">score {entry.score.toFixed(2)}</span>
                                 ) : null}

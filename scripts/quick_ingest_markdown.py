@@ -15,6 +15,7 @@ Use `--dry-run` to only write chunks without embeddings.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from pathlib import Path
@@ -174,8 +175,22 @@ def main() -> int:
         default=None,
         help="Path to chunks.json when using --mode ingest (defaults to <output-dir>/chunks.json).",
     )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        default=os.getenv("LOG_LEVEL", "INFO"),
+        help="Logging level (DEBUG, INFO, WARNING, ERROR). Default: INFO or $LOG_LEVEL.",
+    )
 
     args = parser.parse_args()
+
+    try:
+        logging.basicConfig(
+            level=getattr(logging, args.log_level.upper(), logging.INFO),
+            format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+        )
+    except Exception:
+        logging.basicConfig(level=logging.INFO)
 
     _load_env_files(ENV_LOCATIONS)
 

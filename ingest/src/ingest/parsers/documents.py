@@ -18,6 +18,7 @@ SupportedSuffix = Literal[".pdf", ".docx", ".md"]
 class TableSummary(BaseModel):
     table_id: str
     caption: str | None = None
+    context: str | None = None
     page_range: str | None = None
     row_count: int
     column_count: int

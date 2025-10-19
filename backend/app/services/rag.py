@@ -388,6 +388,7 @@ async def _prepare_retrieval(
         selection.append(
             {
                 "chunk_id": metadata.get("chunk_id"),
+                "chunk_text": doc.page_content,
                 "query": ranked.query,
                 "score": ranked.score,
             }

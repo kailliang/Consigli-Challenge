@@ -176,6 +176,7 @@ async def test_generate_response_performs_expansion_and_reranking() -> None:
     selection = retrieval.get("selection")
     assert isinstance(selection, list)
     assert selection[0]["chunk_id"] == "chunk-b"
+    assert selection[0]["chunk_text"] == "Premium revenue details"
     assert selection[0]["query"] == variant_one
     assert isinstance(selection[0]["score"], float)
 

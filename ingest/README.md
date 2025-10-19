@@ -15,6 +15,30 @@ Current capabilities:
     - Both (default): `python scripts/quick_ingest_markdown.py --mode both`
   - Set `OPENAI_API_KEY` via environment or `backend/.env`/`.env` for ingestion.
 
+### Running the script
+
+Most common invocation (parse + embed + persist all sample data):
+
+```bash
+python scripts/quick_ingest_markdown.py
+```
+
+Target a specific file or directory:
+
+```bash
+python scripts/quick_ingest_markdown.py data/Ford/Ford_Annual_Report_2021.md --mode both
+```
+
+`OPENAI_API_KEY` (and optional `OPENAI_API_BASE`) are read automatically from `.env` files. Override table-summary settings if needed:
+
+```bash
+python scripts/quick_ingest_markdown.py \
+  --mode both \
+  --table-summary-model gpt-5-mini \
+  --table-summary-max-tokens 80 \
+  --table-summary-temperature 0.2
+```
+
 Planned enhancements:
 
 - OCR microservice for figures and scanned documents.

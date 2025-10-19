@@ -33,6 +33,7 @@ except ImportError:  # pragma: no cover
 
 from .parsers.documents import ParsedDocument, parse_document, serialize_manifest
 from .chunking import Chunk, chunk_table_rows, chunk_text
+from .table_context import TableContextGenerator
 from .stores.chroma_writer import ChromaWriter
 from .stores.sqlite_writer import StructuredStore
 
@@ -72,6 +73,9 @@ class PipelineConfig:
     chroma_batch_size: int = 32
     chroma_concurrency: int = 4
     append_chunks: bool = False
+    table_summary_model: str = "gpt-5-mini"
+    table_summary_max_tokens: int = 80
+    table_summary_temperature: float = 0.2
 
 
 @dataclass(slots=True)
@@ -154,6 +158,14 @@ class IngestionPipeline:
         chunk_items: list[tuple[str, Chunk]] = []
         table_records: list[dict] = []
 
+        context_generator = TableContextGenerator(
+            api_key=self.config.openai_api_key,
+            api_base=self.config.openai_api_base,
+            model=self.config.table_summary_model,
+            max_tokens=self.config.table_summary_max_tokens,
+            temperature=self.config.table_summary_temperature,
+        )
+
         for doc_index, parsed in enumerate(parsed_docs):
             company = self.config.company or _infer_company(parsed.path)
             year = self.config.year or _infer_year(parsed.path)
@@ -177,14 +189,26 @@ class IngestionPipeline:
 
             for chunk_idx, chunk in enumerate(text_chunks):
                 chunk_id = f"{parsed.sha256}-text-{chunk_idx}"
-                chunk.metadata.update({"chunk_id": chunk_id})
+                chunk.metadata.update({"chunk_id": chunk_id, "chunk_type": "text"})
                 chunk_items.append((chunk_id, chunk))
 
             for table_index, table in enumerate(parsed.tables):
+                table_context = context_generator.generate(
+                    table=table,
+                    company=company,
+                    year=year,
+                    document_name=parsed.name,
+                    heuristics_sentence=table.context,
+                    surrounding_text=table.caption,
+                )
+
                 table_metadata = {
                     **base_metadata,
                     "table_id": table.table_id,
                     "page_range": table.page_range,
+                    "caption": table.caption,
+                    "table_context": table_context,
+                    "chunk_type": "table",
                 }
 
                 row_chunks = chunk_table_rows(table.rows or [], base_metadata=table_metadata)
