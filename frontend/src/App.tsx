@@ -49,7 +49,7 @@ const App = () => {
         </aside>
       </main>
       <footer className="border-t border-slate-900/60 bg-slate-950/90 py-4 text-center text-xs text-slate-500">
-        Prototype build – ingestion, retrieval, and LangSmith tracing coming soon.
+        Prototype build – ingestion, retrieval, analysis and LangSmith tracing.
       </footer>
     </div>
   );

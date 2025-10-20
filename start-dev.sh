@@ -64,12 +64,23 @@ else
 fi
 
 if [ "$PACKAGE_MANAGER" = "pnpm" ]; then
-    pnpm install >/dev/null
-    pnpm dev --host 0.0.0.0 --port 5173 &
+    LOCK_FILE="pnpm-lock.yaml"
+    INSTALL_CMD="pnpm install"
+    DEV_CMD="pnpm dev --host 0.0.0.0 --port 5173"
 else
-    npm install >/dev/null
-    npm run dev -- --host 0.0.0.0 --port 5173 &
+    LOCK_FILE="package-lock.json"
+    INSTALL_CMD="npm install"
+    DEV_CMD="npm run dev -- --host 0.0.0.0 --port 5173"
 fi
+
+if [ -d "node_modules" ] && [ "${FRONTEND_FORCE_INSTALL:-0}" != "1" ]; then
+    echo "✅ Frontend dependencies detected; skipping reinstall (set FRONTEND_FORCE_INSTALL=1 to force)."
+else
+    echo "📦 Installing frontend dependencies (first run may take a minute)..."
+    $INSTALL_CMD >/dev/null
+fi
+
+$DEV_CMD &
 FRONTEND_PID=$!
 cd ..
 

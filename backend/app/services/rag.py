@@ -363,9 +363,11 @@ async def _prepare_retrieval(
         retrieval_section["error"] = "no_results"
         return _placeholder_response("No relevant context found for that query.", metadata=metadata)
 
+    rerank_query = query_list[0] if query_list else prompt_text
+
     ranked_documents = await _rerank_documents(
         documents_with_origin,
-        prompt_text,
+        rerank_query,
         embeddings=context.embeddings,
         top_k=context.settings.rerank_top_k,
     )
@@ -705,6 +707,7 @@ async def _decide_retrieval(
     )
 
     memory_section = (memory_text or "").strip() or "None."
+    active_entity = _extract_active_entity(memory_section)
     human_payload = (
         f"Conversation memory:\n{memory_section}\n\n"
         f"User message:\n{prompt_text}"
@@ -740,13 +743,6 @@ async def _expand_queries(
 ) -> list[str]:
     """Generate expanded retrieval queries using an LLM with tool support."""
 
-    if limit <= 1:
-        return [prompt_text]
-
-    llm = context.expander_llm
-    if llm is None:
-        return [prompt_text]
-
     system_prompt = (
         "You expand user questions into multiple focused search queries about automotive financial data. "
         "Return a JSON object with a \"queries\" array of clear, self-contained questions. "
@@ -755,6 +751,16 @@ async def _expand_queries(
     )
 
     memory_section = (memory_text or "").strip() or "None."
+    active_entity = _extract_active_entity(memory_section)
+    rewritten_prompt = _rewrite_query_with_entity(prompt_text, active_entity)
+
+    if limit <= 1:
+        return [rewritten_prompt]
+
+    llm = context.expander_llm
+    if llm is None:
+        return [rewritten_prompt]
+
     human_payload = (
         f"Conversation memory:\n{memory_section}\n\n"
         f"User message:\n{prompt_text}"
@@ -775,10 +781,18 @@ async def _expand_queries(
     raw_queries = payload.get("queries")
 
     if not isinstance(raw_queries, list):
-        return [prompt_text]
+        return [rewritten_prompt]
 
-    candidate_queries = [str(query) for query in raw_queries if isinstance(query, str)]
-    expanded = _deduplicate_queries(prompt_text, candidate_queries, limit)
+    candidate_queries = [
+        _rewrite_query_with_entity(str(query), active_entity)
+        for query in raw_queries
+        if isinstance(query, str)
+    ]
+    expanded = _deduplicate_queries(
+        rewritten_prompt,
+        candidate_queries,
+        limit,
+    )
     return expanded
 
 
@@ -862,6 +876,29 @@ def _strip_code_fence(text: str) -> str:
     return stripped.strip()
 
 
+_PRONOUN_RE = re.compile(r"\b(it|its)\b", re.IGNORECASE)
+_ENTITY_CANDIDATE_RE = re.compile(r"\b([A-Z][A-Za-z0-9&'/-]*)\b(?:'s)?")
+_ENTITY_STOPWORDS = {
+    "user",
+    "assistant",
+    "conversation",
+    "recent",
+    "dialogue",
+    "summary",
+    "none",
+    "question",
+    "context",
+    "company",
+    "year",
+    "document",
+    "table",
+    "revenue",
+    "profit",
+    "growth",
+    "report",
+}
+
+
 def _deduplicate_queries(original: str, candidates: Iterable[str], limit: int) -> list[str]:
     """Ensure a deterministic, de-duplicated query list."""
 
@@ -885,3 +922,52 @@ def _deduplicate_queries(original: str, candidates: Iterable[str], limit: int) -
             break
 
     return ordered or [original]
+
+
+def _rewrite_query_with_entity(query: str, entity: str | None) -> str:
+    """Replace pronoun references with the provided entity."""
+
+    if not entity:
+        return query.strip()
+
+    def _replacement(match) -> str:
+        token = match.group(0)
+        if token.lower() == "its":
+            possessive = _to_possessive(entity)
+            return possessive
+        return entity
+
+    rewritten = _PRONOUN_RE.sub(_replacement, query)
+    rewritten = rewritten.strip()
+    if rewritten and rewritten[0].islower():
+        rewritten = rewritten[0].upper() + rewritten[1:]
+    return rewritten
+
+
+def _extract_active_entity(memory_text: str) -> str | None:
+    """Infer the most recent capitalised entity from the conversation memory."""
+
+    matches = list(_ENTITY_CANDIDATE_RE.finditer(memory_text))
+    for match in reversed(matches):
+        candidate = match.group(1).strip()
+        if not candidate:
+            continue
+        lower = candidate.lower()
+        if lower in _ENTITY_STOPWORDS:
+            continue
+        if len(candidate) < 2:
+            continue
+        return candidate
+    return None
+
+
+def _to_possessive(entity: str) -> str:
+    trimmed = entity.rstrip()
+    if not trimmed:
+        return entity
+    lower = trimmed.lower()
+    if lower.endswith("'s") or lower.endswith("'"):
+        return trimmed
+    if trimmed.endswith("s"):
+        return f"{trimmed}'"
+    return f"{trimmed}'s"
