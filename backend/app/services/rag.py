@@ -504,9 +504,47 @@ async def _rerank_documents(
         return [RankedDocument(document=doc, score=1.0, query=query) for doc, query in documents_with_origin[:top_k]]
 
     ranked: list[RankedDocument] = []
+    query_companies, query_years = _extract_query_hints(query_text)
 
     for (doc, query), vector in zip(documents_with_origin, doc_vectors):
         score = _cosine_similarity(query_vector, vector)
+        metadata = doc.metadata or {}
+
+        doc_company_raw = str(metadata.get("company") or "").strip()
+        doc_year_value = metadata.get("year")
+        doc_year: int | None = None
+        if isinstance(doc_year_value, int):
+            doc_year = doc_year_value
+        elif isinstance(doc_year_value, str):
+            match = _YEAR_TOKEN_RE.search(doc_year_value)
+            if match:
+                try:
+                    doc_year = int(match.group(0))
+                except ValueError:
+                    doc_year = None
+        if doc_year is None:
+            fallback_name = str(metadata.get("document_name") or "")
+            match = _YEAR_TOKEN_RE.search(fallback_name)
+            if match:
+                try:
+                    doc_year = int(match.group(0))
+                except ValueError:
+                    doc_year = None
+
+        if query_years and doc_year is not None and doc_year in query_years:
+            score += _YEAR_MATCH_BONUS
+
+        if query_companies:
+            company_match = False
+            if doc_company_raw:
+                company_match = _company_matches(doc_company_raw, query_companies)
+            else:
+                doc_name = str(metadata.get("document_name") or "")
+                if doc_name:
+                    company_match = _company_matches(doc_name, query_companies)
+            if not company_match:
+                score -= _COMPANY_MISMATCH_PENALTY
+
         ranked.append(RankedDocument(document=doc, score=score, query=query))
 
     ranked.sort(key=lambda item: item.score, reverse=True)
@@ -878,6 +916,7 @@ def _strip_code_fence(text: str) -> str:
 
 _PRONOUN_RE = re.compile(r"\b(it|its)\b", re.IGNORECASE)
 _ENTITY_CANDIDATE_RE = re.compile(r"\b([A-Z][A-Za-z0-9&'/-]*)\b(?:'s)?")
+_YEAR_TOKEN_RE = re.compile(r"(?:19|20)\d{2}")
 _ENTITY_STOPWORDS = {
     "user",
     "assistant",
@@ -897,6 +936,9 @@ _ENTITY_STOPWORDS = {
     "growth",
     "report",
 }
+
+_YEAR_MATCH_BONUS = 0.1
+_COMPANY_MISMATCH_PENALTY = 0.25
 
 
 def _deduplicate_queries(original: str, candidates: Iterable[str], limit: int) -> list[str]:
@@ -971,3 +1013,42 @@ def _to_possessive(entity: str) -> str:
     if trimmed.endswith("s"):
         return f"{trimmed}'"
     return f"{trimmed}'s"
+
+
+def _extract_query_hints(query_text: str) -> tuple[set[str], set[int]]:
+    """Extract candidate companies and years referenced in the query."""
+
+    companies: set[str] = set()
+    years: set[int] = set()
+
+    for match in _ENTITY_CANDIDATE_RE.finditer(query_text):
+        candidate = match.group(1).strip()
+        if not candidate:
+            continue
+        lower = candidate.lower()
+        if lower in _ENTITY_STOPWORDS:
+            continue
+        if len(candidate) < 2:
+            continue
+        companies.add(lower)
+
+    for year_text in _YEAR_TOKEN_RE.findall(query_text):
+        try:
+            years.add(int(year_text))
+        except ValueError:
+            continue
+
+    return companies, years
+
+
+def _company_matches(doc_company: str, query_companies: set[str]) -> bool:
+    """Check whether document company metadata aligns with companies in the query."""
+
+    if not doc_company:
+        return False
+
+    normalized = doc_company.lower()
+    for candidate in query_companies:
+        if candidate in normalized or normalized in candidate:
+            return True
+    return False
