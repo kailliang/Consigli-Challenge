@@ -745,7 +745,6 @@ async def _decide_retrieval(
     )
 
     memory_section = (memory_text or "").strip() or "None."
-    active_entity = _extract_active_entity(memory_section)
     human_payload = (
         f"Conversation memory:\n{memory_section}\n\n"
         f"User message:\n{prompt_text}"
@@ -783,21 +782,22 @@ async def _expand_queries(
 
     system_prompt = (
         "You expand user questions into multiple focused search queries about automotive financial data. "
-        "Return a JSON object with a \"queries\" array of clear, self-contained questions. "
-        f"Generate between 3 and {limit} queries that cover different angles, time periods, or companies as needed. "
-        "Use the conversation memory to preserve context (e.g., companies or metrics already identified)."
+        "Return a JSON object with two fields: "
+        '"rewritten_query" (the user message rewritten as a single self-contained question that resolves pronouns '
+        "and repeats key context from the conversation memory) and "
+        f'"queries" (an array of between 3 and {limit} additional self-contained search queries that explore '
+        "related angles). Use the conversation memory to preserve companies, fiscal years, and other entities already "
+        "identified. If the user question is already clear, the rewritten query can match it exactly."
     )
 
     memory_section = (memory_text or "").strip() or "None."
-    active_entity = _extract_active_entity(memory_section)
-    rewritten_prompt = _rewrite_query_with_entity(prompt_text, active_entity)
 
     if limit <= 1:
-        return [rewritten_prompt]
+        return [prompt_text]
 
     llm = context.expander_llm
     if llm is None:
-        return [rewritten_prompt]
+        return [prompt_text]
 
     human_payload = (
         f"Conversation memory:\n{memory_section}\n\n"
@@ -819,18 +819,16 @@ async def _expand_queries(
     raw_queries = payload.get("queries")
 
     if not isinstance(raw_queries, list):
-        return [rewritten_prompt]
+        return [prompt_text]
 
-    candidate_queries = [
-        _rewrite_query_with_entity(str(query), active_entity)
-        for query in raw_queries
-        if isinstance(query, str)
-    ]
-    expanded = _deduplicate_queries(
-        rewritten_prompt,
-        candidate_queries,
-        limit,
-    )
+    rewritten_query = payload.get("rewritten_query")
+    if isinstance(rewritten_query, str) and rewritten_query.strip():
+        primary_query = rewritten_query.strip()
+    else:
+        primary_query = prompt_text.strip() or prompt_text
+
+    candidate_queries = [str(query) for query in raw_queries if isinstance(query, str)]
+    expanded = _deduplicate_queries(primary_query, candidate_queries, limit)
     return expanded
 
 
@@ -914,7 +912,6 @@ def _strip_code_fence(text: str) -> str:
     return stripped.strip()
 
 
-_PRONOUN_RE = re.compile(r"\b(it|its)\b", re.IGNORECASE)
 _ENTITY_CANDIDATE_RE = re.compile(r"\b([A-Z][A-Za-z0-9&'/-]*)\b(?:'s)?")
 _YEAR_TOKEN_RE = re.compile(r"(?:19|20)\d{2}")
 _ENTITY_STOPWORDS = {
@@ -964,55 +961,6 @@ def _deduplicate_queries(original: str, candidates: Iterable[str], limit: int) -
             break
 
     return ordered or [original]
-
-
-def _rewrite_query_with_entity(query: str, entity: str | None) -> str:
-    """Replace pronoun references with the provided entity."""
-
-    if not entity:
-        return query.strip()
-
-    def _replacement(match) -> str:
-        token = match.group(0)
-        if token.lower() == "its":
-            possessive = _to_possessive(entity)
-            return possessive
-        return entity
-
-    rewritten = _PRONOUN_RE.sub(_replacement, query)
-    rewritten = rewritten.strip()
-    if rewritten and rewritten[0].islower():
-        rewritten = rewritten[0].upper() + rewritten[1:]
-    return rewritten
-
-
-def _extract_active_entity(memory_text: str) -> str | None:
-    """Infer the most recent capitalised entity from the conversation memory."""
-
-    matches = list(_ENTITY_CANDIDATE_RE.finditer(memory_text))
-    for match in reversed(matches):
-        candidate = match.group(1).strip()
-        if not candidate:
-            continue
-        lower = candidate.lower()
-        if lower in _ENTITY_STOPWORDS:
-            continue
-        if len(candidate) < 2:
-            continue
-        return candidate
-    return None
-
-
-def _to_possessive(entity: str) -> str:
-    trimmed = entity.rstrip()
-    if not trimmed:
-        return entity
-    lower = trimmed.lower()
-    if lower.endswith("'s") or lower.endswith("'"):
-        return trimmed
-    if trimmed.endswith("s"):
-        return f"{trimmed}'"
-    return f"{trimmed}'s"
 
 
 def _extract_query_hints(query_text: str) -> tuple[set[str], set[int]]:
