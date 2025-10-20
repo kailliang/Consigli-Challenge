@@ -4,11 +4,13 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import requests
 
 
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_ENV_LOCATIONS: Sequence[Path] = (ROOT / "backend" / ".env", ROOT / ".env")
 API_URL = "https://api.va.landing.ai/v1/tools/agentic-document-analysis"
 SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
 
@@ -34,7 +36,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="API key for the agentic document analysis endpoint "
-        "(default: read from environment variables AGENTIC_DOCUMENT_ANALYSIS_API_KEY or agentic_document_analysis_api_key).",
+        "(default: read from .env files or AGENTIC_DOCUMENT_ANALYSIS_API_KEY / agentic_document_analysis_api_key).",
     )
     parser.add_argument(
         "--include-metadata",
@@ -57,7 +59,33 @@ def parse_args() -> argparse.Namespace:
         default=60.0,
         help="Request timeout in seconds (default: 60).",
     )
+    parser.add_argument(
+        "--env-file",
+        action="append",
+        type=Path,
+        default=None,
+        help="Additional .env file(s) to load before resolving the API key.",
+    )
     return parser.parse_args()
+
+
+def _load_env_files(locations: Iterable[Path]) -> None:
+    for location in locations:
+        if not location or not location.exists():
+            continue
+        try:
+            lines = location.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip("\"'")
+            if key and key not in os.environ:
+                os.environ[key] = value
 
 
 def resolve_api_key(explicit: str | None) -> str:
@@ -120,7 +148,7 @@ def convert_document(
 ) -> bool:
     with document.open("rb") as stream:
         files = {
-            "document": (document.name, stream, _guess_mime_type(document)),
+            "pdf": (document.name, stream, _guess_mime_type(document)),
         }
         data = {
             "include_metadata_in_markdown": str(include_metadata).lower(),
@@ -149,6 +177,9 @@ def convert_document(
         return False
 
     markdown = payload.get("markdown")
+    if markdown is None and isinstance(payload.get("data"), dict):
+        markdown = payload["data"].get("markdown")
+
     if not isinstance(markdown, str):
         print(f"[error] Missing 'markdown' field in response for {document}: {payload}", file=sys.stderr)
         return False
@@ -162,6 +193,11 @@ def main() -> int:
     args = parse_args()
     input_dir = args.input_dir.resolve()
     output_dir = args.output_dir.resolve() if args.output_dir else None
+
+    env_locations = list(DEFAULT_ENV_LOCATIONS)
+    if args.env_file:
+        env_locations.extend(args.env_file)
+    _load_env_files(env_locations)
 
     documents = gather_documents(input_dir)
     if not documents:

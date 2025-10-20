@@ -18,7 +18,26 @@ Current capabilities:
     - Both (default): `python scripts/quick_ingest_markdown.py --mode both`
   - Set `OPENAI_API_KEY` via environment or `backend/.env`/`.env` for ingestion.
 
-### Running the script
+### Converting PDFs/DOCX to Markdown
+
+Use `scripts/pdf_to_markdown.py` to batch convert source documents before ingestion:
+
+```bash
+python scripts/pdf_to_markdown.py \
+  --input-dir ingest/data \
+  --output-dir ingest/data_markdown \
+  --include-metadata \
+  --timeout 120
+```
+
+- Defaults scan `ingest/data` recursively and write `.md` files alongside the originals.
+- Provide your API key via `--api-key` or the `AGENTIC_DOCUMENT_ANALYSIS_API_KEY` environment variable.
+- Flags: `--include-metadata` embeds extra metadata (like detected headings, page numbers, section info), 
+  `--include-marginalia`, 
+  `--disable-rotation-detection` 
+  control Landing AI options.
+
+### Chunking and Ingestion
 
 Most common invocation (parse + embed + persist all sample data):
 
@@ -39,6 +58,7 @@ python scripts/quick_ingest_markdown.py \
   --mode both \
   --table-summary-model gpt-5-mini \
 ```
+
 Chunking parameters (defaults):
 - `chunk_size` (target_max): 400
 - `chunk_target_min` (derived): 300

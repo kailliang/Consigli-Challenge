@@ -17,7 +17,7 @@ dist/
 # Project data
 data/
 .DS_Store
-
+ingest/data_markdown/
 # Env files
 *.env
 
