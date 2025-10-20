@@ -16,9 +16,6 @@ export const ChatLayout = ({ messages, onPromptSubmit, isStreaming, onReset }: C
       <header className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 shadow-sm">
         <div>
           <h1 className="text-lg font-semibold text-slate-100">Annual Report Analyst</h1>
-          <p className="text-xs text-slate-400">
-            Retrieval pipeline coming soon. Ask a question to try the conversation flow.
-          </p>
         </div>
         <button
           type="button"

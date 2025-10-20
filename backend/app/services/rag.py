@@ -561,6 +561,9 @@ async def _rerank_documents(
 
     ranked.sort(key=lambda item: item.score, reverse=True)
 
+    if query_companies:
+        ranked = _prioritize_company_coverage(ranked, query_companies, top_k)
+
     if trace_scores:
         _log_chunk_scores(trace_scores)
 
@@ -720,12 +723,20 @@ async def _decide_retrieval(
         return RetrievalDecision(should_retrieve=True, response=None, reason=None)
 
     system_prompt = (
-        "You route automotive financial analysis questions. "
-        "Respond with a JSON object containing: "
-        '"should_retrieve" (boolean), "assistant_response" (string), and optional concise "reason" (string), within 30 words. '
-        "If retrieval is not needed, provide a short natural-language reply in "
-        '"assistant_response" explaining why. If retrieval is needed, set "assistant_response" to an empty string. '
-        "Consider the provided conversation memory when determining whether the user is referencing earlier turns."
+        "You are an expert automotive financial analyst. Your task is to analyze user questions and determine whether to "
+        "retrieve information from the RAG system, which contains annual reports of automotive companies and curated general news.\n\n"
+        "Instructions:\n"
+        "1. Analyze the user's question to determine if it requires retrieving information from the RAG system.\n"
+        "2. Consider the provided conversation memory when determining whether the user is referencing earlier turns.\n"
+        "3. Respond with a JSON object in the following format:\n"
+        "{\n"
+        '  "should_retrieve": boolean,\n'
+        '  "assistant_response": string,\n'
+        '  "reason": string (optional)\n'
+        "}\n"
+        "4. If retrieval is not needed, provide a short natural-language reply in \"assistant_response\" explaining why.\n"
+        "5. If retrieval is needed, set \"assistant_response\" to an empty string.\n"
+        "6. Keep the \"reason\" concise and within 30 words."
     )
 
     memory_section = (memory_text or "").strip() or "None."
@@ -988,6 +999,45 @@ def _company_matches(doc_company: str, query_companies: set[str]) -> bool:
         if candidate in normalized or normalized in candidate:
             return True
     return False
+
+
+def _prioritize_company_coverage(
+    ranked: list[RankedDocument],
+    query_companies: set[str],
+    top_k: int,
+) -> list[RankedDocument]:
+    """Ensure at least one top chunk per queried company when available."""
+
+    normalized_companies = [company.lower() for company in query_companies]
+    selected_indices: set[int] = set()
+    selected_documents: list[RankedDocument] = []
+
+    def _document_company(metadata: dict[str, Any]) -> str:
+        raw = str(metadata.get("company") or "").strip()
+        if raw:
+            return raw
+        doc_name = str(metadata.get("document_name") or "").strip()
+        return doc_name
+
+    for company in normalized_companies:
+        for index, ranked_doc in enumerate(ranked):
+            if index in selected_indices:
+                continue
+            metadata = ranked_doc.document.metadata or {}
+            candidate = _document_company(metadata).lower()
+            if not candidate:
+                continue
+            if company in candidate or candidate in company:
+                selected_documents.append(ranked_doc)
+                selected_indices.add(index)
+                break
+
+    if not selected_documents:
+        return ranked[:top_k]
+
+    remaining = [doc for index, doc in enumerate(ranked) if index not in selected_indices]
+    ordered = (selected_documents + remaining)[:top_k]
+    return ordered
 
 
 def _log_chunk_scores(scores: list[dict[str, Any]]) -> None:
