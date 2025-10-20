@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
@@ -201,6 +202,16 @@ def main() -> int:
 
     _load_env_files(ENV_LOCATIONS)
 
+    if args.mode in {"both", "ingest"}:
+        chroma_dir = args.chroma_dir
+        if chroma_dir.exists():
+            try:
+                shutil.rmtree(chroma_dir)
+                print(f"Removed existing Chroma directory: {chroma_dir}")
+            except Exception as exc:
+                print(f"Failed to remove Chroma directory {chroma_dir}: {exc}")
+                return 1
+
     # Resolve and validate inputs (for modes that parse/chunk)
     resolved_paths = _resolve_input_paths([Path(p) for p in args.inputs])
     chunks_path = args.chunks_path or (args.output_dir / "chunks.json")
@@ -234,6 +245,7 @@ def main() -> int:
             openai_api_base=api_base,
             chroma_batch_size=args.chroma_batch_size,
             chroma_concurrency=args.chroma_concurrency,
+            table_summary_model=os.getenv("TABLE_SUMMARY_MODEL"),
         )
 
         # If both company and year provided, run as a single group

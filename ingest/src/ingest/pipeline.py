@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,7 +74,7 @@ class PipelineConfig:
     chroma_batch_size: int = 32
     chroma_concurrency: int = 4
     append_chunks: bool = False
-    table_summary_model: str = "gpt-5-mini"
+    table_summary_model: str | None = None
     table_summary_max_tokens: int = 200
     table_summary_concurrency: int = 50
 
@@ -161,7 +162,7 @@ class IngestionPipeline:
         context_generator = TableContextGenerator(
             api_key=self.config.openai_api_key,
             api_base=self.config.openai_api_base,
-            model=self.config.table_summary_model,
+            model=self._resolve_table_summary_model(),
             max_tokens=self.config.table_summary_max_tokens,
             max_concurrency=self.config.table_summary_concurrency,
         )
@@ -247,6 +248,20 @@ class IngestionPipeline:
                 )
 
         return chunk_items, table_records
+
+    def _resolve_table_summary_model(self) -> str:
+        if self.config.table_summary_model:
+            return self.config.table_summary_model
+
+        env_model = os.getenv("TABLE_SUMMARY_MODEL")
+        if env_model:
+            return env_model
+
+        llm_model = os.getenv("LLM_MODEL")
+        if llm_model:
+            return llm_model
+
+        return "gpt-5"
 
     def _embed_and_persist(self, chunk_items: list[tuple[str, Chunk]], table_records: list[dict]) -> int:
         console.print(f"[cyan]Preparing {len(chunk_items)} chunks for embedding.[/]")

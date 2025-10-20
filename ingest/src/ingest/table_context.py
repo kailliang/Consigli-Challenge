@@ -224,9 +224,9 @@ class TableContextGenerator:
         prompt_lines.append(
             (
                 "Write one English sentence (max 100 words) describing the table's subject, "
-                "key metrics, dimensions, and years or units. "
                 "Only use information present in the table or provided context. "
                 "Do not introduce new facts or assumptions. Return only the sentence."
+                "Focus on revenue, profit, growth trends, dimensions, and years or units. "
             )
         )
 
