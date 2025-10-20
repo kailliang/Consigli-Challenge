@@ -479,6 +479,7 @@ def _document_identity(doc: Document) -> str:
     return digest
 
 
+@traceable(name="rag.rerank_documents")
 async def _rerank_documents(
     documents_with_origin: list[tuple[Document, str]],
     query_text: str,
@@ -504,6 +505,7 @@ async def _rerank_documents(
         return [RankedDocument(document=doc, score=1.0, query=query) for doc, query in documents_with_origin[:top_k]]
 
     ranked: list[RankedDocument] = []
+    trace_scores: list[dict[str, Any]] = []
     query_companies, query_years = _extract_query_hints(query_text)
 
     for (doc, query), vector in zip(documents_with_origin, doc_vectors):
@@ -547,7 +549,21 @@ async def _rerank_documents(
 
         ranked.append(RankedDocument(document=doc, score=score, query=query))
 
+        trace_scores.append(
+            {
+                "chunk_id": metadata.get("chunk_id") or metadata.get("document_name"),
+                "query": query,
+                "score": score,
+                "company": metadata.get("company"),
+                "year": doc_year,
+            }
+        )
+
     ranked.sort(key=lambda item: item.score, reverse=True)
+
+    if trace_scores:
+        _log_chunk_scores(trace_scores)
+
     return ranked[:top_k]
 
 
@@ -665,41 +681,9 @@ def _apply_numeric_validation(
     answer_text: str,
     table_lookup: dict[str, Any],
 ) -> tuple[str, str | None]:
-    """Validate numeric literals against retrieved table rows."""
+    """(Disabled) Previously validated numeric literals against retrieved table rows."""
 
-    base_text = answer_text.rstrip()
-
-    if not table_lookup:
-        return base_text.strip(), None
-
-    extracted_numbers = {
-        _normalize_number(match) for match in re.findall(r"\b[+-]?\d[\d,\.]*\b", base_text)
-    }
-    extracted_numbers.discard("")
-
-    if not extracted_numbers:
-        return base_text.strip(), None
-
-    table_numbers: set[str] = set()
-    for summary in table_lookup.values():
-        rows = summary.rows or []
-        for row in rows:
-            for value in row.values():
-                normalized = _normalize_number(str(value))
-                if normalized:
-                    table_numbers.add(normalized)
-
-    missing = sorted(num for num in extracted_numbers if num not in table_numbers)
-
-    if missing:
-        suffix = (
-            "\n\nValidation warning: unable to verify the following values against retrieved tables — "
-            + ", ".join(missing)
-        )
-        return base_text.strip() + suffix, suffix
-
-    suffix = "\n\nValidation: numeric values verified against retrieved tables."
-    return base_text.strip() + suffix, suffix
+    return answer_text.strip(), None
 
 
 def _normalize_number(value: str) -> str:
@@ -787,7 +771,10 @@ async def _expand_queries(
         "and repeats key context from the conversation memory) and "
         f'"queries" (an array of between 3 and {limit} additional self-contained search queries that explore '
         "related angles). Use the conversation memory to preserve companies, fiscal years, and other entities already "
-        "identified. If the user question is already clear, the rewritten query can match it exactly."
+        "identified. If the user question is already clear, the rewritten query can match it exactly. "
+        "Whenever the timeframe or fiscal period depends on today's date (e.g., references to 'past three years' or "
+        "similar relative ranges), you MUST invoke the `current_time` tool before returning your JSON so that the "
+        "expansions anchor to the correct calendar years."
     )
 
     memory_section = (memory_text or "").strip() or "None."
@@ -1000,3 +987,17 @@ def _company_matches(doc_company: str, query_companies: set[str]) -> bool:
         if candidate in normalized or normalized in candidate:
             return True
     return False
+
+
+def _log_chunk_scores(scores: list[dict[str, Any]]) -> None:
+    """Log chunk scores to LangSmith if tracing helpers are available."""
+
+    try:
+        from langsmith.run_helpers import log_outputs  # type: ignore
+    except Exception:
+        return
+
+    try:
+        log_outputs({"chunk_scores": scores})
+    except Exception:
+        return
