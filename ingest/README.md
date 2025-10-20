@@ -12,6 +12,8 @@ Current capabilities:
   - Modes:
     - Chunk only: `python scripts/quick_ingest_markdown.py --mode chunk`
     - Ingest only (from chunks.json): `python scripts/quick_ingest_markdown.py --mode ingest --chunks-path data/chunks.json`
+    `python scripts/quick_ingest_markdown.py --embedding-model text-embedding-3-large --mode ingest --chunks-path data/chunks.json`
+    
     - Both (default): `python scripts/quick_ingest_markdown.py --mode both`
   - Set `OPENAI_API_KEY` via environment or `backend/.env`/`.env` for ingestion.
 

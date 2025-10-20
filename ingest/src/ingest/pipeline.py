@@ -64,7 +64,7 @@ class PipelineConfig:
     # Updated strategy: 300–400 target, max 600, overlap 30–50
     chunk_size: int = 400
     chunk_overlap: int = 40
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = "text-embedding-3-large"
     chroma_path: Path = Path("./data/chroma")
     structured_db_path: Path = Path("./data/metrics.db")
     collection_name: str = "annual-reports"

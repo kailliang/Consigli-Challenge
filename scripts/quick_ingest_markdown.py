@@ -168,8 +168,8 @@ def main() -> int:
     parser.add_argument(
         "--embedding-model",
         type=str,
-        default="text-embedding-3-small",
-        help="Embedding model name (default: text-embedding-3-small).",
+        default=None,
+        help="Embedding model name (default: $EMBEDDINGS_MODEL or text-embedding-3-large).",
     )
     parser.add_argument("--openai-api-key", type=str, default=None, help="OpenAI API key (falls back to env).")
     parser.add_argument("--openai-api-base", type=str, default=None, help="Optional OpenAI API base URL.")
@@ -207,6 +207,7 @@ def main() -> int:
 
     api_key = args.openai_api_key or os.getenv("OPENAI_API_KEY")
     api_base = args.openai_api_base or os.getenv("OPENAI_API_BASE")
+    embedding_model = args.embedding_model or os.getenv("EMBEDDINGS_MODEL") or "text-embedding-3-large"
 
     collection_name = (
         args.collection_name or (f"annual-reports-{args.company.lower()}" if args.company else "annual-reports")
@@ -225,7 +226,7 @@ def main() -> int:
             dry_run=(args.mode == "chunk") or args.dry_run,
             chunk_size=args.chunk_size,
             chunk_overlap=args.chunk_overlap,
-            embedding_model=args.embedding_model,
+            embedding_model=embedding_model,
             chroma_path=args.chroma_dir,
             structured_db_path=args.structured_db,
             collection_name=collection_name,
@@ -347,7 +348,7 @@ def main() -> int:
         writer = ChromaWriter(
             persist_dir=args.chroma_dir,
             collection_name=collection_name,
-            embedding_model=args.embedding_model,
+            embedding_model=embedding_model,
             openai_api_key=api_key,
             openai_api_base=api_base,
             batch_size=args.chroma_batch_size,
