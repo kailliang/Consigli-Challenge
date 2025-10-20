@@ -775,6 +775,7 @@ async def _expand_queries(
         "Whenever the timeframe or fiscal period depends on today's date (e.g., references to 'past three years' or "
         "similar relative ranges), you MUST invoke the `current_time` tool before returning your JSON so that the "
         "expansions anchor to the correct calendar years."
+        "The current database contains annual reports for the following companies: BMW, Tesla, and Ford."
     )
 
     memory_section = (memory_text or "").strip() or "None."

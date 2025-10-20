@@ -1,6 +1,25 @@
 # LLM-Powered Annual Report Analyst
 
-Prototype workspace for a multi-modal retrieval-augmented generation (RAG) system that analyzes automotive annual reports. The backend is scaffolded with FastAPI + LangChain; the frontend is a modern React + Vite chat shell ready for streaming integration. This repository follows the implementation path described in `guide.md`.
+Prototype workspace for a multi-modal retrieval-augmented generation (RAG) system that analyzes automotive annual reports. The backend is scaffolded with FastAPI + LangChain; the frontend is a modern React + Vite chat shell ready for streaming integration. 
+
+## Application Overview
+
+- **Ingestion pipeline** (Python, `ingest/`) parses Markdown/PDF/DOCX annual reports, builds table/context summaries with OpenAI, embeds text/table chunks via `text-embedding-3-large`, and persists data to Chroma + SQLite.
+- **Backend service** (`backend/`) exposes a chat-oriented API that orchestrates retrieval, conversation memory, query expansion, reranking, and answer generation using configurable OpenAI models.
+- **Frontend client** (`frontend/`) provides a chat UI for analysts to ask questions, review responses, and inspect supporting citations.
+
+With ingestion completed, the application can answer revenue/profit and trend questions across recent reports for Tesla, BMW, Ford, and other supported companies.
+
+## RAG Workflow
+
+1. **User prompt + memory** – Each message is combined with short conversation memory so pronouns and follow-ups inherit context.
+2. **Retrieval gating** – A lightweight LLM decides if Chroma lookup is required; small talk bypasses retrieval.
+3. **Query expansion** – An LLM (with current time tool access) emits a rewritten, self-contained query plus diverse variations to cover alternate phrasing and fiscal periods.
+4. **Candidate retrieval** – Expanded queries run against the vector store; results are deduplicated by chunk identifier.
+5. **Metadata-aware reranking** – Each chunk is re-embedded, scored against the rewritten query, boosted for matching years, and penalized for cross-company leakage.
+6. **Answer generation** – The top-ranked context is fed to the main LLM, which produces a cited answer returned to the frontend.
+
+LangSmith tracing is enabled to capture chunk scores, query expansions, and decision logs for debugging.
 
 ## Repository Layout
 
@@ -43,13 +62,3 @@ Prototype workspace for a multi-modal retrieval-augmented generation (RAG) syste
 1. Navigate to `frontend/` and install dependencies (`pnpm install` recommended).
 2. Copy `.env.example` to `.env.local` and adjust `VITE_API_BASE_URL` if needed.
 3. Start the dev server: `pnpm dev`.
-
-## Next Steps
-
-1. **Ingestion pipeline**: add OCR/table normalization, better unit parsing, and CLI orchestration for large batches.
-2. **Vector + structured stores**: expose retrieval clients, add migrations, and keep Chroma/SQLite schemas in sync across environments.
-3. **RAG orchestration**: replace the placeholder generator with LangChain RetrievalQA, numeric reasoning, and LangSmith tracing.
-4. **Frontend integration**: upgrade to streamed responses, richer citation views, ingestion controls, and comparison visualizations.
-5. **Validation & observability**: harden numeric checks against structured datasets, add pytest coverage (API + ingestion), contract fixtures, and frontend e2e smoke tests.
-
-Refer to `guide.md` for detailed requirements, success metrics, and long-term roadmap.
