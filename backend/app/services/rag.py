@@ -142,9 +142,9 @@ def build_rag_context(settings: AppSettings) -> RAGContext:
                 "system",
                 (
                     "You are an automotive financial analyst. "
-                    "Use the provided context to answer with precise numbers and currency units. "
-                    "If context is insufficient, explicitly state the limitation. "
-                    "Incorporate relevant details from the conversation memory when it helps clarify the user's intent."
+                    "Provide answers based on the provided context, ensuring that all numerical data includes the appropriate currency units and is supported by cited content."
+                    "If the provided context does not contain the necessary information to answer the question accurately, state that the context is insufficient and specify what additional information is needed."
+                    "Keep your answers concise."
                 ),
             ),
             (
@@ -614,19 +614,7 @@ def _format_context(documents: Iterable[Document], table_lookup: dict[str, Any])
 
         header = " | ".join(part for part in header_parts if part)
 
-        if table_id and table_id in table_lookup:
-            table_summary = table_lookup[table_id]
-            rows = table_summary.rows or []
-            preview_rows = rows[:5]
-            row_text = "\n".join(
-                " | ".join(f"{key}: {value}" for key, value in row.items() if value) for row in preview_rows
-            )
-            time_series = structured.summarize_time_series(table_summary)
-            summary_text = "\n".join(time_series)
-            combined = "\n\n".join(part for part in [row_text, summary_text] if part)
-            body = combined or doc.page_content
-        else:
-            body = doc.page_content
+        body = doc.page_content
 
         context_blocks.append(f"{header}\n{body}")
 
@@ -649,14 +637,7 @@ def _build_citations(documents: Iterable[Document], table_lookup: dict[str, Any]
         page = metadata.get("page_range")
         section = metadata.get("table_id") or metadata.get("chunk_type")
 
-        snippet_source = doc.page_content
-        if metadata.get("table_id") and metadata.get("table_id") in table_lookup:
-            table_summary = table_lookup[metadata["table_id"]]
-            rows = table_summary.rows or []
-            first_row = rows[0] if rows else {}
-            snippet_source = " | ".join(f"{k}: {v}" for k, v in first_row.items() if v) or snippet_source
-
-        snippet = shorten(" ".join(snippet_source.split()), width=280, placeholder="…")
+        snippet = shorten(" ".join(doc.page_content.split()), width=280, placeholder="…")
 
         citations.append(
             Citation(
